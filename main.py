@@ -29,10 +29,10 @@ def _add_gui_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--white-depth", type=int, default=3, help="White Alpha-Beta depth")
     parser.add_argument("--black-depth", type=int, default=3, help="Black Alpha-Beta depth")
     parser.add_argument(
-        "--white-iterations", type=int, default=400, help="White MCTS simulations"
+        "--white-iterations", type=int, default=100, help="White MCTS simulations"
     )
     parser.add_argument(
-        "--black-iterations", type=int, default=400, help="Black MCTS simulations"
+        "--black-iterations", type=int, default=100, help="Black MCTS simulations"
     )
     parser.add_argument(
         "--white-time", type=float, default=None, help="White MCTS time budget (seconds)"
@@ -41,7 +41,7 @@ def _add_gui_args(parser: argparse.ArgumentParser) -> None:
         "--black-time", type=float, default=None, help="Black MCTS time budget (seconds)"
     )
     parser.add_argument(
-        "--delay", type=int, default=500, help="Live AI vs AI move delay in ms (default: 500)"
+        "--delay", type=int, default=300, help="Live AI vs AI move delay in ms (default: 300)"
     )
     parser.add_argument("--fen", default=chess.STARTING_FEN, help="Starting FEN position")
     parser.add_argument(

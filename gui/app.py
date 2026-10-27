@@ -40,6 +40,10 @@ PROMOTION_PIECES: tuple[tuple[str, chess.PieceType], ...] = (
     ("Knight (♞)", chess.KNIGHT),
 )
 
+PIECE_FONT: tuple[str, int] = ("Segoe UI Symbol", 32)
+COORD_FONT: tuple[str, int, str] = ("Segoe UI", 9, "bold")
+EVAL_FONT: tuple[str, int, str] = ("Segoe UI", 8, "bold")
+
 
 def compute_eval_bar_state(
     board: chess.Board,
@@ -47,15 +51,15 @@ def compute_eval_bar_state(
     claim_draw: bool = True,
 ) -> tuple[float, str, int]:
     """Return (white_ratio in [0.0, 1.0], display_label, raw_centipawn_score)."""
-    cp = evaluate(board, claim_draw=claim_draw)
     outcome = board.outcome(claim_draw=claim_draw)
     if outcome is not None:
         if outcome.winner == chess.WHITE:
-            return 1.0, "1-0", cp
+            return 1.0, "1-0", MATE_SCORE
         if outcome.winner == chess.BLACK:
-            return 0.0, "0-1", cp
+            return 0.0, "0-1", -MATE_SCORE
         return 0.5, "0.0", 0
 
+    cp = evaluate(board, claim_draw=False)
     if abs(cp) >= MATE_SCORE - 1000:
         return (1.0, "M", cp) if cp > 0 else (0.0, "-M", cp)
 
@@ -101,8 +105,9 @@ def build_agent(
     kind: str,
     *,
     depth: str | int | None = 3,
-    iterations: str | int | None = 400,
+    iterations: str | int | None = 100,
     time_limit: str | float | None = None,
+    rollout_max_plies: int = 24,
     seed: int | None = None,
     claim_draw: bool = True,
 ) -> ChessAI | None:
@@ -123,6 +128,7 @@ def build_agent(
         return MCTS(
             iterations=parsed_iter,
             time_limit=parsed_time,
+            rollout_max_plies=rollout_max_plies,
             seed=seed,
             claim_draw=claim_draw,
         )
@@ -165,11 +171,11 @@ class ChessGUI:
         black_kind: str = "alpha_beta",
         white_depth: int = 3,
         black_depth: int = 3,
-        white_iterations: int = 400,
-        black_iterations: int = 400,
+        white_iterations: int = 100,
+        black_iterations: int = 100,
         white_time_limit: float | None = None,
         black_time_limit: float | None = None,
-        move_delay_ms: int = 500,
+        move_delay_ms: int = 300,
         show_eval_bar: bool = True,
         auto_start: bool = True,
         promotion_chooser: Callable[[chess.Color], chess.PieceType] | None = None,
@@ -618,13 +624,16 @@ class ChessGUI:
         rank_idx = row if self.flipped else 7 - row
         return chess.square(file_idx, rank_idx)
 
-    def _refresh_ui(self) -> None:
-        self._draw_board()
-        self._draw_eval_bar()
-        self._update_status_text()
+    def _refresh_ui(self, board: chess.Board | None = None) -> None:
+        if board is None:
+            board = self.controller.board
+        self._draw_board(board)
+        self._draw_eval_bar(board)
+        self._update_status_text(board)
 
-    def _draw_eval_bar(self) -> None:
-        board = self.controller.board
+    def _draw_eval_bar(self, board: chess.Board | None = None) -> None:
+        if board is None:
+            board = self.controller.board
         white_ratio, label, cp = compute_eval_bar_state(
             board, claim_draw=self.controller.claim_draw
         )
@@ -689,13 +698,14 @@ class ChessGUI:
             text_y,
             text=label,
             fill=text_fg,
-            font=("Segoe UI", 8, "bold"),
+            font=EVAL_FONT,
             tags="eval_label",
         )
 
-    def _draw_board(self) -> None:
+    def _draw_board(self, board: chess.Board | None = None) -> None:
+        if board is None:
+            board = self.controller.board
         self.board_canvas.delete("all")
-        board = self.controller.board
         king_in_check_sq = board.king(board.turn) if board.is_check() else None
         last_squares = (
             {self.last_move.from_square, self.last_move.to_square}
@@ -756,25 +766,32 @@ class ChessGUI:
             if piece is not None:
                 glyph = UNICODE_PIECES[(piece.color, piece.piece_type)]
                 cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                # Subtle outline shadow for readability on all square colors
-                shadow = "#000000" if piece.color == chess.WHITE else "#ffffff"
-                fg = "#ffffff" if piece.color == chess.WHITE else "#1a1a1a"
-                for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+                if piece.color == chess.WHITE:
+                    # Single subtle drop shadow for white piece contrast on light squares
                     self.board_canvas.create_text(
-                        cx + dx,
-                        cy + dy,
+                        cx + 1,
+                        cy + 1,
                         text=glyph,
-                        fill=shadow,
-                        font=("Segoe UI Symbol", 32),
+                        fill="#333333",
+                        font=PIECE_FONT,
                     )
-                self.board_canvas.create_text(
-                    cx,
-                    cy,
-                    text=glyph,
-                    fill=fg,
-                    font=("Segoe UI Symbol", 32),
-                    tags="piece",
-                )
+                    self.board_canvas.create_text(
+                        cx,
+                        cy,
+                        text=glyph,
+                        fill="#ffffff",
+                        font=PIECE_FONT,
+                        tags="piece",
+                    )
+                else:
+                    self.board_canvas.create_text(
+                        cx,
+                        cy,
+                        text=glyph,
+                        fill="#1a1a1a",
+                        font=PIECE_FONT,
+                        tags="piece",
+                    )
 
         # Draw file and rank coordinates
         for idx in range(8):
@@ -787,17 +804,17 @@ class ChessGUI:
                 self.BOARD_PX - self.MARGIN // 2,
                 text=file_char,
                 fill="#cccccc",
-                font=("Segoe UI", 9, "bold"),
+                font=COORD_FONT,
             )
             self.board_canvas.create_text(
                 self.MARGIN // 2,
                 ry,
                 text=rank_char,
                 fill="#cccccc",
-                font=("Segoe UI", 9, "bold"),
+                font=COORD_FONT,
             )
 
-    def _update_status_text(self) -> None:
+    def _update_status_text(self, board: chess.Board | None = None) -> None:
         if self.controller.is_terminal():
             res = self.controller.result()
             winner_str = (
@@ -808,9 +825,11 @@ class ChessGUI:
             self.status_var.set(f"Game Over: {res.result} — {winner_str} ({res.termination})")
             return
 
+        if board is None:
+            board = self.controller.board
         side = "White" if self.controller.turn == chess.WHITE else "Black"
         actor = self.player_names[self.controller.turn]
-        check_suffix = " [CHECK!]" if self.controller.board.is_check() else ""
+        check_suffix = " [CHECK!]" if board.is_check() else ""
         if self.ai_thinking:
             self.status_var.set(f"{side} ({actor}) is thinking...{check_suffix}")
         elif self.paused:
@@ -983,7 +1002,7 @@ class ChessGUI:
         self.drain_ai_queue()
         try:
             if self.root.winfo_exists():
-                self.poll_after_id = self.root.after(25, self._poll_ai_queue)
+                self.poll_after_id = self.root.after(40, self._poll_ai_queue)
         except tk.TclError:
             return
 
