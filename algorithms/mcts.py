@@ -2,41 +2,34 @@
 
 import math
 import random
-from time import perf_counter
 
 import chess
 from algorithms.mcts_node import MCTSNode
+from algorithms.mcts_rollout import cutoff_value, exchange_gain, position_score, rollout_move
 
 
 class MCTS:
-    """Budgeted MCTS compatible with chess_system.ai_interface.ChessAI.
+    """Search a fresh UCT tree per move with fixed iterations and bounded rollouts.
 
-    Rollouts sample legal moves uniformly. Nonterminal rollouts stopped by the
-    depth or time limit receive a neutral 0.5 estimate, not an actual game draw.
-    If both budgets are supplied, stop at whichever is reached first. Time is a
-    cooperative deadline, not a hard process timeout. Seeded iteration-only
-    searches are reproducible; wall-time searches need not be.
+    Simulation rewards use White's perspective: win +1, draw 0, loss -1.
     """
 
     def __init__(
         self,
-        iterations: int | None = 1000,
+        iterations: int = 1000,
         *,
-        time_limit: float | None = None,
-        exploration_constant: float = math.sqrt(2),
+        exploration_constant: float = 2 * math.sqrt(2),
         rollout_max_plies: int = 80,
         seed: int | None = None,
         claim_draw: bool = True,
     ):
-        if iterations is not None and (type(iterations) is not int or iterations < 1):
-            raise ValueError("iterations must be a positive integer or None")
-        if time_limit is not None and (
-            isinstance(time_limit, bool) or not isinstance(time_limit, (int, float))
-            or not math.isfinite(time_limit) or time_limit <= 0
-        ):
-            raise ValueError("time_limit must be a finite positive number or None")
-        if iterations is None and time_limit is None:
-            raise ValueError("At least one search budget is required")
+        """Configure the iteration budget, UCT exploration and rollout limit.
+
+        rollout_max_plies counts half-moves; zero evaluates without further play.
+        seed controls a private RNG; claim_draw should match the controller.
+        """
+        if type(iterations) is not int or iterations < 1:
+            raise ValueError("iterations must be a positive integer")
         if (
             isinstance(exploration_constant, bool)
             or not isinstance(exploration_constant, (int, float))
@@ -50,7 +43,6 @@ class MCTS:
         if type(claim_draw) is not bool:
             raise ValueError("claim_draw must be a bool")
         self.iterations = iterations
-        self.time_limit = time_limit
         self.exploration_constant = exploration_constant
         self.rollout_max_plies = rollout_max_plies
         self.seed = seed
@@ -59,52 +51,101 @@ class MCTS:
         self.last_search_stats: dict[str, int] = {"iterations": 0, "rollouts": 0}
 
     def choose_move(self, board: chess.Board) -> chess.Move:
-        """Search a private tree; never push or pop on the caller's board."""
-        start = perf_counter()
-        deadline = None if self.time_limit is None else start + self.time_limit
+        """Choose a legal move without changing the input board or its history.
+
+        Run selection, expansion, rollout and backpropagation for each iteration.
+        Prefer an immediate win; otherwise choose most visits, then highest mean.
+        Reject invalid or terminal positions with ValueError.
+        """
         self.last_search_stats = {"iterations": 0, "rollouts": 0}
         if not board.is_valid():
             raise ValueError("Invalid chess position")
         root = MCTSNode(board, claim_draw=self.claim_draw)
         if root.is_terminal():
             raise ValueError("Cannot choose a move in a terminal position")
-        # Even a deadline exhausted during setup must return a legal move.
-        fallback = self._rng.choice(root.untried_moves)
-        completed = 0
-        while self.iterations is None or completed < self.iterations:
-            if deadline is not None and perf_counter() >= deadline:
-                break
+        winning_moves = self._prepare_root(root)
+        for _ in range(self.iterations):
             node = root
             # Selection: descend through fully expanded nodes using UCT.
             while not node.untried_moves and node.children:
-                if deadline is not None and perf_counter() >= deadline:
-                    break
                 node = node.select_child(self.exploration_constant)
-            if deadline is not None and perf_counter() >= deadline:
-                break
-            # Expansion: terminal nodes have no untried moves.
+            # Expansion: add one untried move.
             if node.untried_moves:
-                node = node.expand(self._rng)
-            winner = self._simulate(node.board, deadline)
-            node.backpropagate(winner)
-            completed += 1
-        self.last_search_stats = {"iterations": completed, "rollouts": completed}
-        if not root.children:
-            return fallback
-        # Robust child: visits first, empirical mean as the tie-breaker.
+                move = (node.untried_moves[-1] if node is root else
+                        rollout_move(node.board, self._rng, node.untried_moves))
+                node = node.expand(self._rng, move)
+            value = self._simulate(node.board)
+            node.backpropagate_value(value)
+        self.last_search_stats = {"iterations": self.iterations, "rollouts": self.iterations}
+        if winning_moves:
+            return winning_moves[0]
         best = max(root.children, key=lambda child: (child.visits, child.mean_value))
         assert best.move is not None
         return best.move
 
-    def _simulate(self, board: chess.Board, deadline: float | None) -> chess.Color | None:
+    def _prepare_root(self, root: MCTSNode) -> list[chess.Move]:
+        """Find immediate wins, filter avoidable mate-in-one losses and order moves.
+
+        Remove losing moves only if a safe alternative exists. Highest priority
+        is placed last for expansion. Return immediate wins and restore the board.
+        """
+        board = root.board
+        priorities = {move: 0.0 for move in root.untried_moves}
+        safe, losing, winning = [], [], []
+        for move in list(root.untried_moves):
+            gain = exchange_gain(board, move)
+            board.push(move)
+            try:
+                outcome = board.outcome(claim_draw=self.claim_draw)
+                if outcome is not None:
+                    if outcome.winner == (not board.turn):
+                        winning.append(move)
+                        priorities[move] = 100000.0
+                    else:
+                        priorities[move] = 0.0
+                    safe.append(move)
+                    continue
+                score = position_score(board) * (1 if not board.turn else -1)
+                if gain < 0:
+                    score += gain
+                priorities[move] = score
+                unsafe = False
+                for reply in list(board.legal_moves):
+                    if not board.gives_check(reply):
+                        continue
+                    board.push(reply)
+                    try:
+                        unsafe = board.is_checkmate()
+                    finally:
+                        board.pop()
+                    if unsafe:
+                        break
+                if unsafe:
+                    losing.append(move)
+                    priorities[move] = -100000.0
+                else:
+                    safe.append(move)
+            finally:
+                board.pop()
+        if safe:
+            root.untried_moves = [move for move in root.untried_moves if move not in losing]
+        root.untried_moves.sort(key=lambda move: priorities[move])
+        return winning
+
+    def _simulate(self, board: chess.Board) -> float:
+        """Play a bounded continuation on a copy and return a White-perspective reward.
+
+        Return +1/0/-1 for a terminal result; otherwise use the cutoff estimate
+        in [-0.98, +0.98]. Check the outcome after the final permitted ply too.
+        """
         rollout = board.copy(stack=True)
         for _ in range(self.rollout_max_plies):
             outcome = rollout.outcome(claim_draw=self.claim_draw)
             if outcome is not None:
-                return outcome.winner
-            if deadline is not None and perf_counter() >= deadline:
-                return None
-            rollout.push(self._rng.choice(list(rollout.legal_moves)))
+                return 0.0 if outcome.winner is None else (1.0 if outcome.winner == chess.WHITE else -1.0)
+            rollout.push(rollout_move(rollout, self._rng))
         # Check again so a mate on the last permitted ply is not lost.
         outcome = rollout.outcome(claim_draw=self.claim_draw)
-        return outcome.winner if outcome is not None else None
+        if outcome is not None:
+            return 0.0 if outcome.winner is None else (1.0 if outcome.winner == chess.WHITE else -1.0)
+        return cutoff_value(rollout)
