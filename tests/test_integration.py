@@ -35,23 +35,19 @@ class ProtocolAndEvalBarTests(unittest.TestCase):
         self.assertIsInstance(ab, AlphaBetaAI)
         self.assertEqual(ab.depth, 2)
 
-        mcts = build_agent("mcts", iterations="20", time_limit="0.5", seed=1)
+        mcts = build_agent("mcts", iterations="20", seed=1)
         self.assertIsInstance(mcts, MCTS)
         self.assertEqual(mcts.iterations, 20)
-        self.assertEqual(mcts.time_limit, 0.5)
-
-        mcts_time_only = build_agent("mcts", iterations="", time_limit="0.2")
-        self.assertIsInstance(mcts_time_only, MCTS)
-        self.assertIsNone(mcts_time_only.iterations)
-        self.assertEqual(mcts_time_only.time_limit, 0.2)
 
         for bad_kwargs in (
             {"kind": "unknown"},
             {"kind": "alpha_beta", "depth": "0"},
             {"kind": "alpha_beta", "depth": "abc"},
-            {"kind": "mcts", "iterations": "", "time_limit": ""},
+            {"kind": "mcts", "iterations": ""},
             {"kind": "mcts", "iterations": "-5"},
             {"kind": "mcts", "iterations": "10", "time_limit": "0"},
+            {"kind": "mcts", "iterations": "10", "time_limit": "-1"},
+            {"kind": "mcts", "iterations": "10", "time_limit": "abc"},
         ):
             with self.subTest(bad_kwargs=bad_kwargs), self.assertRaises(ValueError):
                 build_agent(**bad_kwargs)

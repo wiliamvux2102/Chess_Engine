@@ -107,7 +107,7 @@ def build_agent(
     depth: str | int | None = 3,
     iterations: str | int | None = 100,
     time_limit: str | float | None = None,
-    rollout_max_plies: int = 24,
+    rollout_max_plies: int | None = 24,
     seed: int | None = None,
     claim_draw: bool = True,
 ) -> ChessAI | None:
@@ -122,16 +122,18 @@ def build_agent(
         return AlphaBetaAI(depth=parsed_depth)
     if normalized == "mcts":
         parsed_iter = parse_optional_int(iterations, "MCTS simulations")
-        parsed_time = parse_optional_float(time_limit, "MCTS time budget")
-        if parsed_iter is None and parsed_time is None:
-            raise ValueError("MCTS requires simulations and/or time budget")
-        return MCTS(
-            iterations=parsed_iter,
-            time_limit=parsed_time,
-            rollout_max_plies=rollout_max_plies,
-            seed=seed,
-            claim_draw=claim_draw,
-        )
+        if time_limit is not None and str(time_limit).strip():
+            parse_optional_float(time_limit, "MCTS time budget")
+        if parsed_iter is None:
+            raise ValueError("MCTS requires simulations")
+        mcts_kwargs: dict[str, object] = {
+            "iterations": parsed_iter,
+            "seed": seed,
+            "claim_draw": claim_draw,
+        }
+        if rollout_max_plies is not None:
+            mcts_kwargs["rollout_max_plies"] = rollout_max_plies
+        return MCTS(**mcts_kwargs)
     raise ValueError(f"Unknown player type: {kind!r}")
 
 
