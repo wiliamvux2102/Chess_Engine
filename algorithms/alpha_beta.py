@@ -7,6 +7,7 @@ White maximizes and Black minimizes.
 
 import chess
 
+from algorithms.eval_registry import EvalMode, create_ab_evaluator
 from algorithms.evaluation import PIECE_VALUES, evaluate
 
 
@@ -60,11 +61,27 @@ def order_moves(board: chess.Board) -> list[chess.Move]:
 class AlphaBetaAI:
     """Chess AI using Alpha-Beta Pruning."""
 
-    def __init__(self, depth: int = 3):
+    def __init__(
+        self,
+        depth: int = 3,
+        *,
+        eval_mode: EvalMode | str = EvalMode.AB_CLASSIC,
+        claim_draw: bool = True,
+    ):
         if depth < 1:
             raise ValueError("Search depth must be positive")
 
         self.depth = depth
+        if isinstance(eval_mode, str):
+            mode_map = {
+                "ab_classic": EvalMode.AB_CLASSIC,
+                "mcts_pe": EvalMode.MCTS_PE,
+                "hybrid": EvalMode.HYBRID,
+            }
+            eval_mode = mode_map.get(eval_mode.lower(), EvalMode.AB_CLASSIC)
+        self.eval_mode = eval_mode
+        self.claim_draw = claim_draw
+        self._evaluator = create_ab_evaluator(self.eval_mode, claim_draw=self.claim_draw)
         self.last_search_stats = {
             "depth": 0,
             "nodes": 0,
@@ -74,7 +91,7 @@ class AlphaBetaAI:
     def choose_move(self, board: chess.Board) -> chess.Move:
         """Choose the best legal move without modifying the board."""
 
-        if board.is_game_over(claim_draw=True):
+        if board.is_game_over(claim_draw=self.claim_draw):
             raise ValueError("Cannot choose a move in a terminal position")
 
         self.last_search_stats = {
@@ -133,18 +150,18 @@ class AlphaBetaAI:
         ply: int,
         alpha: float,
         beta: float,
-    ) -> int:
+    ) -> float:
         """Return a minimax score or an alpha-beta bound."""
 
         self.last_search_stats["nodes"] += 1
 
         # 1. Terminal state
-        if board.is_game_over(claim_draw=True):
-            return evaluate(board, ply=ply)
+        if board.is_game_over(claim_draw=self.claim_draw):
+            return self._evaluator(board, ply)
 
         # 2. Depth cutoff
         if depth == 0:
-            return evaluate(board, ply=ply)
+            return self._evaluator(board, ply)
 
         maximizing = board.turn == chess.WHITE
 

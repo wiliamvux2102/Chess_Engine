@@ -24,59 +24,59 @@ class EvalMode(Enum):
 
 
 def create_evaluator(mode: EvalMode, claim_draw: bool = True) -> Callable[[chess.Board, int], float]:
-    """Return an evaluation function matching the specified mode.
+    """Return an evaluation function matching the specified mode (in centipawns).
 
-    All evaluators return score from White's perspective in centipawns.
-    For MCTS modes, the score is converted to reward in [-1, 1] via tanh.
+    Used for move ordering in root and general position scoring.
     """
     if mode == EvalMode.AB_CLASSIC:
         def evaluator(board: chess.Board, ply: int = 0) -> float:
-            return ab_evaluate(board, ply=ply, claim_draw=claim_draw)
+            return float(ab_evaluate(board, ply=ply, claim_draw=claim_draw))
         return evaluator
 
     elif mode == EvalMode.MCTS_PE:
         def evaluator(board: chess.Board, ply: int = 0) -> float:
-            # MCTS position_score returns centipawns, convert to reward
-            cp = mcts_position_score(board)
-            # Check terminal
-            outcome = board.outcome(claim_draw=claim_draw)
-            if outcome is not None:
-                if outcome.winner == chess.WHITE:
-                    return 1.0
-                elif outcome.winner == chess.BLACK:
-                    return -1.0
-                return 0.0
-            # Scale to [-1, 1] via tanh (same as cutoff_value)
-            if abs(cp) >= 10000:  # Near mate
-                return 0.98 if cp > 0 else -0.98
-            return 0.98 * math.tanh(cp / 600.0)
+            return mcts_position_score(board)
         return evaluator
 
     elif mode == EvalMode.HYBRID:
-        # Use Alpha-Beta's terminal + material/positional but MCTS's scaling
         def evaluator(board: chess.Board, ply: int = 0) -> float:
-            # Terminal check
-            terminal = ab_evaluate(board, ply=ply, claim_draw=claim_draw)
-            if abs(terminal) >= AB_MATE_SCORE - 1000:
-                return 1.0 if terminal > 0 else -1.0
-            # Use Alpha-Beta evaluation (centipawns) with MCTS scaling
-            cp = ab_evaluate(board, ply=ply, claim_draw=claim_draw)
-            if abs(cp) >= 10000:
-                return 0.98 if cp > 0 else -0.98
-            return 0.98 * math.tanh(cp / 600.0)
+            return float(ab_evaluate(board, ply=ply, claim_draw=claim_draw))
+        return evaluator
+
+    raise ValueError(f"Unknown eval mode: {mode}")
+
+
+def create_ab_evaluator(mode: EvalMode, claim_draw: bool = True) -> Callable[[chess.Board, int], float]:
+    """Return an evaluation function for Alpha-Beta returning centipawn scores."""
+    if mode == EvalMode.AB_CLASSIC:
+        def evaluator(board: chess.Board, ply: int = 0) -> float:
+            return float(ab_evaluate(board, ply=ply, claim_draw=claim_draw))
+        return evaluator
+
+    elif mode in (EvalMode.MCTS_PE, EvalMode.HYBRID):
+        def evaluator(board: chess.Board, ply: int = 0) -> float:
+            outcome = board.outcome(claim_draw=claim_draw)
+            if outcome is not None:
+                if outcome.winner is None:
+                    return 0.0
+                return float(AB_MATE_SCORE - ply) if outcome.winner == chess.WHITE else float(-AB_MATE_SCORE + ply)
+            return mcts_position_score(board)
         return evaluator
 
     raise ValueError(f"Unknown eval mode: {mode}")
 
 
 def create_cutoff_evaluator(mode: EvalMode, claim_draw: bool = True) -> Callable[[chess.Board], float]:
-    """Return a cutoff evaluator for MCTS rollout termination."""
+    """Return a cutoff evaluator for MCTS rollout termination in [-0.98, +0.98]."""
     if mode == EvalMode.AB_CLASSIC:
         def evaluator(board: chess.Board) -> float:
+            outcome = board.outcome(claim_draw=claim_draw)
+            if outcome is not None:
+                return 0.0 if outcome.winner is None else (1.0 if outcome.winner == chess.WHITE else -1.0)
             cp = ab_evaluate(board, claim_draw=claim_draw)
             if abs(cp) >= AB_MATE_SCORE - 1000:
-                return 1.0 if cp > 0 else -1.0
-            return math.tanh(cp / 600.0)
+                return 0.98 if cp > 0 else -0.98
+            return 0.98 * math.tanh(cp / 600.0)
         return evaluator
 
     elif mode == EvalMode.MCTS_PE:
@@ -84,10 +84,13 @@ def create_cutoff_evaluator(mode: EvalMode, claim_draw: bool = True) -> Callable
 
     elif mode == EvalMode.HYBRID:
         def evaluator(board: chess.Board) -> float:
+            outcome = board.outcome(claim_draw=claim_draw)
+            if outcome is not None:
+                return 0.0 if outcome.winner is None else (1.0 if outcome.winner == chess.WHITE else -1.0)
             cp = ab_evaluate(board, claim_draw=claim_draw)
             if abs(cp) >= AB_MATE_SCORE - 1000:
-                return 1.0 if cp > 0 else -1.0
-            return math.tanh(cp / 600.0)
+                return 0.98 if cp > 0 else -0.98
+            return 0.98 * math.tanh(cp / 600.0)
         return evaluator
 
     raise ValueError(f"Unknown eval mode: {mode}")

@@ -16,16 +16,19 @@ from algorithms.alpha_beta import AlphaBetaAI
 from algorithms.eval_registry import EvalMode
 from algorithms.evaluation import MATE_SCORE, evaluate
 from algorithms.mcts import MCTS
+from algorithms.mcts_rollout import position_score as mcts_position_score
 from chess_system.ai_interface import ChessAI
 from chess_system.game_controller import GameController
 
+# Both White and Black use the solid-filled Unicode chess glyphs (U+265A..U+265F)
+# so White pieces are completely solid inside rather than hollow wireframe outlines.
 UNICODE_PIECES: dict[tuple[chess.Color, chess.PieceType], str] = {
-    (chess.WHITE, chess.KING): "♔",
-    (chess.WHITE, chess.QUEEN): "♕",
-    (chess.WHITE, chess.ROOK): "♖",
-    (chess.WHITE, chess.BISHOP): "♗",
-    (chess.WHITE, chess.KNIGHT): "♘",
-    (chess.WHITE, chess.PAWN): "♙",
+    (chess.WHITE, chess.KING): "♚",
+    (chess.WHITE, chess.QUEEN): "♛",
+    (chess.WHITE, chess.ROOK): "♜",
+    (chess.WHITE, chess.BISHOP): "♝",
+    (chess.WHITE, chess.KNIGHT): "♞",
+    (chess.WHITE, chess.PAWN): "♟",
     (chess.BLACK, chess.KING): "♚",
     (chess.BLACK, chess.QUEEN): "♛",
     (chess.BLACK, chess.ROOK): "♜",
@@ -41,7 +44,7 @@ PROMOTION_PIECES: tuple[tuple[str, chess.PieceType], ...] = (
     ("Knight (♞)", chess.KNIGHT),
 )
 
-PIECE_FONT: tuple[str, int] = ("Segoe UI Symbol", 32)
+PIECE_FONT: tuple[str, int] = ("Segoe UI Symbol", 34)
 COORD_FONT: tuple[str, int, str] = ("Segoe UI", 9, "bold")
 EVAL_FONT: tuple[str, int, str] = ("Segoe UI", 8, "bold")
 
@@ -50,7 +53,8 @@ def compute_eval_bar_state(
     board: chess.Board,
     *,
     claim_draw: bool = True,
-) -> tuple[float, str, int]:
+    eval_mode: str | EvalMode = "ab_classic",
+) -> tuple[float, str, float | int]:
     """Return (white_ratio in [0.0, 1.0], display_label, raw_centipawn_score)."""
     outcome = board.outcome(claim_draw=claim_draw)
     if outcome is not None:
@@ -60,7 +64,12 @@ def compute_eval_bar_state(
             return 0.0, "0-1", -MATE_SCORE
         return 0.5, "0.0", 0
 
-    cp = evaluate(board, claim_draw=False)
+    mode_str = eval_mode.value if isinstance(eval_mode, EvalMode) else str(eval_mode).lower()
+    if mode_str == "mcts_pe":
+        cp = mcts_position_score(board)
+    else:
+        cp = evaluate(board, claim_draw=False)
+
     if abs(cp) >= MATE_SCORE - 1000:
         return (1.0, "M", cp) if cp > 0 else (0.0, "-M", cp)
 
@@ -121,7 +130,21 @@ def build_agent(
         parsed_depth = parse_optional_int(depth, "Alpha-Beta depth")
         if parsed_depth is None:
             raise ValueError("Alpha-Beta depth is required")
-        return AlphaBetaAI(depth=parsed_depth)
+        ab_kwargs: dict[str, object] = {
+            "depth": parsed_depth,
+            "claim_draw": claim_draw,
+        }
+        if eval_mode is not None:
+            mode_map = {
+                "ab_classic": EvalMode.AB_CLASSIC,
+                "mcts_pe": EvalMode.MCTS_PE,
+                "hybrid": EvalMode.HYBRID,
+            }
+            if eval_mode.lower() in mode_map:
+                ab_kwargs["eval_mode"] = mode_map[eval_mode.lower()]
+            else:
+                raise ValueError(f"Unknown eval_mode: {eval_mode}. Valid: {list(mode_map.keys())}")
+        return AlphaBetaAI(**ab_kwargs)
     if normalized == "mcts":
         parsed_iter = parse_optional_int(iterations, "MCTS simulations")
         if time_limit is not None and str(time_limit).strip():
@@ -162,17 +185,17 @@ def format_search_stats(stats: dict[str, int] | None, elapsed: float) -> str:
 class ChessGUI:
     """Interactive 8x8 Chess GUI supporting Human vs AI and Live AI vs AI."""
 
-    SQ_SIZE = 64
-    MARGIN = 24
+    SQ_SIZE = 68
+    MARGIN = 26
     BOARD_PX = SQ_SIZE * 8 + MARGIN * 2
-    EVAL_WIDTH = 38
+    EVAL_WIDTH = 40
 
-    LIGHT_SQ = "#eeeed2"
-    DARK_SQ = "#769656"
-    SELECTED_SQ = "#f6f669"
+    LIGHT_SQ = "#ebecd0"
+    DARK_SQ = "#739552"
+    SELECTED_SQ = "#bbcb2b"
     LAST_MOVE_LIGHT = "#f5f682"
     LAST_MOVE_DARK = "#b9ca43"
-    CHECK_SQ = "#e65c5c"
+    CHECK_SQ = "#e53935"
     EVAL_WHITE_BG = "#f0f0f0"
     EVAL_BLACK_BG = "#262421"
 
@@ -189,6 +212,9 @@ class ChessGUI:
         black_iterations: int = 100,
         white_time_limit: float | None = None,
         black_time_limit: float | None = None,
+        white_eval_mode: str = "ab_classic",
+        black_eval_mode: str = "hybrid",
+        eval_bar_mode: str = "ab_classic",
         move_delay_ms: int = 300,
         show_eval_bar: bool = True,
         auto_start: bool = True,
@@ -197,8 +223,8 @@ class ChessGUI:
     ):
         self.owns_root = root is None
         self.root = root if root is not None else tk.Tk()
-        self.root.title("Chess Engine - Alpha-Beta & MCTS")
-        self.root.configure(bg="#2b2b2b")
+        self.root.title("Chess Engine — Alpha-Beta & MCTS")
+        self.root.configure(bg="#1e1f22")
 
         self.promotion_chooser = promotion_chooser or self._prompt_promotion_dialog
         self.error_handler = error_handler or messagebox.showerror
@@ -241,6 +267,9 @@ class ChessGUI:
         self.black_time_var = tk.StringVar(
             value="" if black_time_limit is None else str(black_time_limit)
         )
+        self.white_eval_mode_var = tk.StringVar(value=white_eval_mode)
+        self.black_eval_mode_var = tk.StringVar(value=black_eval_mode)
+        self.eval_bar_mode_var = tk.StringVar(value=eval_bar_mode)
         self.delay_var = tk.StringVar(value=str(max(0, int(move_delay_ms))))
         self.fen_var = tk.StringVar(value=fen)
         self.show_eval_var = tk.BooleanVar(value=show_eval_bar)
@@ -250,36 +279,155 @@ class ChessGUI:
         self.stats_var = tk.StringVar(value="Stats: -")
         self.pause_btn_text = tk.StringVar(value="Pause")
 
+        self._setup_theme()
         self._build_ui()
         self.toggle_eval_bar(show_eval_bar)
         self.new_game(auto_start=auto_start)
         self.poll_after_id = self.root.after(25, self._poll_ai_queue)
 
+    def _setup_theme(self) -> None:
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        bg_main = "#1e1f22"
+        bg_card = "#2b2d31"
+        bg_input = "#383a40"
+        bg_hover = "#474a52"
+        accent = "#629924"
+        accent_hover = "#73b12b"
+        fg_main = "#f2f3f5"
+        fg_muted = "#b5bac1"
+        border = "#3f4147"
+
+        style.configure("TFrame", background=bg_main)
+        style.configure("Card.TFrame", background=bg_card)
+        style.configure(
+            "TLabelframe",
+            background=bg_card,
+            bordercolor=border,
+            darkcolor=border,
+            lightcolor=border,
+            relief="solid",
+            borderwidth=1,
+        )
+        style.configure(
+            "TLabelframe.Label",
+            background=bg_card,
+            foreground="#81b64c",
+            font=("Segoe UI", 9, "bold"),
+        )
+        style.configure(
+            "TLabel",
+            background=bg_card,
+            foreground=fg_main,
+            font=("Segoe UI", 9),
+        )
+        style.configure(
+            "Muted.TLabel",
+            background=bg_card,
+            foreground=fg_muted,
+            font=("Segoe UI", 9),
+        )
+        style.configure(
+            "TButton",
+            background=bg_input,
+            foreground=fg_main,
+            bordercolor=border,
+            focuscolor=bg_input,
+            font=("Segoe UI", 9, "bold"),
+            padding=(8, 5),
+        )
+        style.map(
+            "TButton",
+            background=[("active", bg_hover), ("pressed", "#4e5058")],
+            foreground=[("active", "#ffffff")],
+        )
+        style.configure(
+            "Accent.TButton",
+            background=accent,
+            foreground="#ffffff",
+            bordercolor="#53831e",
+            focuscolor=accent,
+            font=("Segoe UI", 9, "bold"),
+            padding=(8, 5),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", accent_hover), ("pressed", "#53831e")],
+            foreground=[("active", "#ffffff")],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=bg_card,
+            foreground=fg_main,
+            font=("Segoe UI", 9),
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", bg_card)],
+            foreground=[("active", "#ffffff")],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=bg_input,
+            background=bg_input,
+            foreground=fg_main,
+            arrowcolor=fg_main,
+            bordercolor=border,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", bg_input)],
+            selectbackground=[("readonly", bg_input)],
+            selectforeground=[("readonly", fg_main)],
+            foreground=[("readonly", fg_main)],
+        )
+        style.configure(
+            "TSpinbox",
+            fieldbackground=bg_input,
+            background=bg_input,
+            foreground=fg_main,
+            arrowcolor=fg_main,
+            bordercolor=border,
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=bg_input,
+            foreground=fg_main,
+            insertcolor=fg_main,
+            bordercolor=border,
+        )
+
     def _build_ui(self) -> None:
-        main_frame = ttk.Frame(self.root, padding=10)
+        main_frame = ttk.Frame(self.root, padding=14)
         main_frame.grid(row=0, column=0, sticky="nsew")
         self.root.rowconfigure(0, weight=1)
         self.root.columnconfigure(0, weight=1)
 
         # Left Area: Eval Bar (Col 0) + 8x8 Board Canvas (Col 1)
         self.board_container = ttk.Frame(main_frame)
-        self.board_container.grid(row=0, column=0, padx=(0, 12), sticky="n")
+        self.board_container.grid(row=0, column=0, padx=(0, 14), sticky="n")
 
         self.eval_canvas = tk.Canvas(
             self.board_container,
             width=self.EVAL_WIDTH,
             height=self.BOARD_PX,
-            bg="#1e1e1e",
-            highlightthickness=0,
+            bg="#16171a",
+            highlightthickness=1,
+            highlightbackground="#3f4147",
         )
-        self.eval_canvas.grid(row=0, column=0, padx=(0, 6))
+        self.eval_canvas.grid(row=0, column=0, padx=(0, 8))
 
         self.board_canvas = tk.Canvas(
             self.board_container,
             width=self.BOARD_PX,
             height=self.BOARD_PX,
-            bg="#1e1e1e",
-            highlightthickness=0,
+            bg="#16171a",
+            highlightthickness=1,
+            highlightbackground="#3f4147",
         )
         self.board_canvas.grid(row=0, column=1)
         self.board_canvas.bind("<Button-1>", self._on_canvas_click)
@@ -289,45 +437,46 @@ class ChessGUI:
         ctrl.grid(row=0, column=1, sticky="nsew")
 
         # 1. Quick Mode Presets
-        preset_box = ttk.LabelFrame(ctrl, text="Quick Mode Presets", padding=6)
-        preset_box.pack(fill="x", pady=(0, 6))
+        preset_box = ttk.LabelFrame(ctrl, text="Quick Mode Presets", padding=8)
+        preset_box.pack(fill="x", pady=(0, 8))
         ttk.Button(
             preset_box,
             text="Human vs AI",
-            command=lambda: self.apply_preset("human", "alpha_beta"),
-        ).grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+            command=lambda: self.apply_preset("human", "alpha_beta", white_eval="ab_classic", black_eval="ab_classic"),
+        ).grid(row=0, column=0, padx=3, pady=2, sticky="ew")
         ttk.Button(
             preset_box,
             text="AI vs Human",
-            command=lambda: self.apply_preset("mcts", "human"),
-        ).grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+            command=lambda: self.apply_preset("mcts", "human", white_eval="hybrid", black_eval="ab_classic"),
+        ).grid(row=0, column=1, padx=3, pady=2, sticky="ew")
         ttk.Button(
             preset_box,
             text="Live AI vs AI",
-            command=lambda: self.apply_preset("alpha_beta", "mcts"),
-        ).grid(row=0, column=2, padx=2, pady=2, sticky="ew")
+            command=lambda: self.apply_preset("alpha_beta", "mcts", white_eval="ab_classic", black_eval="hybrid"),
+        ).grid(row=0, column=2, padx=3, pady=2, sticky="ew")
         ttk.Button(
             preset_box,
             text="Human vs Human",
             command=lambda: self.apply_preset("human", "human"),
-        ).grid(row=0, column=3, padx=2, pady=2, sticky="ew")
+        ).grid(row=0, column=3, padx=3, pady=2, sticky="ew")
         for col in range(4):
             preset_box.columnconfigure(col, weight=1)
 
-        # 2. Player & AI Configuration
-        cfg_box = ttk.LabelFrame(ctrl, text="Players & Search Budget", padding=6)
-        cfg_box.pack(fill="x", pady=(0, 6))
-        headers = ("Side", "Agent", "AB Depth", "MCTS Sims", "Time (s)")
+        # 2. Player & AI Configuration (Side, Agent, Evaluation, Depth, Sims, Time)
+        cfg_box = ttk.LabelFrame(ctrl, text="Players & Search Budget", padding=8)
+        cfg_box.pack(fill="x", pady=(0, 8))
+        headers = ("Side", "Agent", "Evaluation", "AB Depth", "MCTS Sims", "Time (s)")
         for col, text in enumerate(headers):
-            ttk.Label(cfg_box, text=text, font=("Segoe UI", 9, "bold")).grid(
-                row=0, column=col, padx=3, pady=2
+            ttk.Label(cfg_box, text=text, style="Muted.TLabel", font=("Segoe UI", 9, "bold")).grid(
+                row=0, column=col, padx=4, pady=(0, 4)
             )
 
         self._build_side_row(
             cfg_box,
             row=1,
-            label="White (♔)",
+            label="White (□)",
             kind_var=self.white_kind_var,
+            eval_var=self.white_eval_mode_var,
             depth_var=self.white_depth_var,
             iter_var=self.white_iter_var,
             time_var=self.white_time_var,
@@ -335,31 +484,20 @@ class ChessGUI:
         self._build_side_row(
             cfg_box,
             row=2,
-            label="Black (♚)",
+            label="Black (■)",
             kind_var=self.black_kind_var,
+            eval_var=self.black_eval_mode_var,
             depth_var=self.black_depth_var,
             iter_var=self.black_iter_var,
             time_var=self.black_time_var,
         )
 
-        # Eval Mode Selection Row
-        eval_row = ttk.Frame(cfg_box)
-        eval_row.grid(row=3, column=0, columnspan=5, sticky="ew", pady=(6, 0))
-        ttk.Label(eval_row, text="MCTS Eval Mode:").pack(side="left", padx=(0, 6))
-        self.white_eval_mode_var = tk.StringVar(value="hybrid")
-        self.black_eval_mode_var = tk.StringVar(value="hybrid")
-        eval_modes = ["hybrid", "ab_classic", "mcts_pe"]
-        ttk.Combobox(eval_row, textvariable=self.white_eval_mode_var, values=eval_modes, state="readonly", width=12).pack(side="left", padx=2)
-        ttk.Label(eval_row, text="(White)").pack(side="left", padx=(0, 12))
-        ttk.Combobox(eval_row, textvariable=self.black_eval_mode_var, values=eval_modes, state="readonly", width=12).pack(side="left", padx=2)
-        ttk.Label(eval_row, text="(Black)").pack(side="left")
-
-        # FEN & Delay Row
-        fen_frame = ttk.Frame(cfg_box)
-        fen_frame.grid(row=3, column=0, columnspan=5, sticky="ew", pady=(6, 0))
+        # FEN Row (Row 3, spans all columns)
+        fen_frame = ttk.Frame(cfg_box, style="Card.TFrame")
+        fen_frame.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(6, 0))
         ttk.Label(fen_frame, text="FEN:").pack(side="left")
         ttk.Entry(fen_frame, textvariable=self.fen_var, width=32).pack(
-            side="left", padx=4, fill="x", expand=True
+            side="left", padx=6, fill="x", expand=True
         )
         ttk.Button(
             fen_frame,
@@ -369,14 +507,17 @@ class ChessGUI:
         ).pack(side="left")
 
         # 3. Live Match Controls & View Options
-        action_box = ttk.LabelFrame(ctrl, text="Match & View Controls", padding=6)
-        action_box.pack(fill="x", pady=(0, 6))
+        action_box = ttk.LabelFrame(ctrl, text="Match & View Controls", padding=8)
+        action_box.pack(fill="x", pady=(0, 8))
 
-        btn_row = ttk.Frame(action_box)
+        btn_row = ttk.Frame(action_box, style="Card.TFrame")
         btn_row.pack(fill="x", pady=2)
-        ttk.Button(btn_row, text="New Game", command=self.new_game).pack(
-            side="left", padx=2, expand=True, fill="x"
-        )
+        ttk.Button(
+            btn_row,
+            text="New Game",
+            style="Accent.TButton",
+            command=self.new_game,
+        ).pack(side="left", padx=2, expand=True, fill="x")
         self.pause_btn = ttk.Button(
             btn_row, textvariable=self.pause_btn_text, command=self.toggle_pause
         )
@@ -391,51 +532,76 @@ class ChessGUI:
             side="left", padx=2, expand=True, fill="x"
         )
 
-        opt_row = ttk.Frame(action_box)
-        opt_row.pack(fill="x", pady=(4, 0))
+        opt_row = ttk.Frame(action_box, style="Card.TFrame")
+        opt_row.pack(fill="x", pady=(6, 0))
         ttk.Checkbutton(
             opt_row,
-            text="Show Eval Bar (Left)",
+            text="Show Eval Bar",
             variable=self.show_eval_var,
             command=lambda: self.toggle_eval_bar(self.show_eval_var.get()),
-        ).pack(side="left", padx=(2, 12))
+        ).pack(side="left", padx=(2, 6))
 
-        ttk.Label(opt_row, text="AI Move Delay (ms):").pack(side="left")
+        ttk.Label(opt_row, text="Bar Eval:", style="Muted.TLabel").pack(side="left", padx=(4, 2))
+        bar_combo = ttk.Combobox(
+            opt_row,
+            textvariable=self.eval_bar_mode_var,
+            values=("ab_classic", "mcts_pe"),
+            state="readonly",
+            width=10,
+        )
+        bar_combo.pack(side="left", padx=(0, 8))
+        bar_combo.bind("<<ComboboxSelected>>", lambda e: self._draw_eval_bar())
+
+        ttk.Label(opt_row, text="AI Delay (ms):").pack(side="left")
         ttk.Spinbox(
             opt_row,
             from_=0,
             to=3000,
             increment=100,
             textvariable=self.delay_var,
-            width=7,
+            width=6,
         ).pack(side="left", padx=4)
 
         # 4. Status & Search Metrics
-        status_box = ttk.LabelFrame(ctrl, text="Game Status & AI Telemetry", padding=6)
-        status_box.pack(fill="x", pady=(0, 6))
+        status_box = ttk.LabelFrame(ctrl, text="Game Status & AI Telemetry", padding=8)
+        status_box.pack(fill="x", pady=(0, 8))
         ttk.Label(
             status_box,
             textvariable=self.status_var,
             font=("Segoe UI", 10, "bold"),
-            wraplength=360,
+            foreground="#ffffff",
+            wraplength=370,
         ).pack(anchor="w")
         ttk.Label(
             status_box,
             textvariable=self.eval_text_var,
-            font=("Segoe UI", 9),
-        ).pack(anchor="w", pady=(2, 0))
+            font=("Segoe UI", 9, "bold"),
+            foreground="#81b64c",
+        ).pack(anchor="w", pady=(3, 0))
         ttk.Label(
             status_box,
             textvariable=self.stats_var,
+            style="Muted.TLabel",
             font=("Consolas", 9),
-            wraplength=360,
-        ).pack(anchor="w", pady=(2, 0))
+            wraplength=370,
+        ).pack(anchor="w", pady=(3, 0))
 
         # 5. Live Move History
-        hist_box = ttk.LabelFrame(ctrl, text="Move History", padding=6)
+        hist_box = ttk.LabelFrame(ctrl, text="Move History", padding=8)
         hist_box.pack(fill="both", expand=True)
         self.history_list = tk.Listbox(
-            hist_box, font=("Consolas", 9), height=12, activestyle="none"
+            hist_box,
+            font=("Consolas", 9),
+            height=12,
+            bg="#1e1f22",
+            fg="#e3e5e8",
+            selectbackground="#404249",
+            selectforeground="#ffffff",
+            highlightthickness=1,
+            highlightbackground="#3f4147",
+            relief="flat",
+            borderwidth=4,
+            activestyle="none",
         )
         scrollbar = ttk.Scrollbar(
             hist_box, orient="vertical", command=self.history_list.yview
@@ -451,6 +617,7 @@ class ChessGUI:
         row: int,
         label: str,
         kind_var: tk.StringVar,
+        eval_var: tk.StringVar,
         depth_var: tk.StringVar,
         iter_var: tk.StringVar,
         time_var: tk.StringVar,
@@ -461,17 +628,25 @@ class ChessGUI:
             textvariable=kind_var,
             values=("human", "alpha_beta", "mcts"),
             state="readonly",
-            width=11,
+            width=10,
         )
         combo.grid(row=row, column=1, padx=3, pady=2)
-        ttk.Spinbox(parent, from_=1, to=8, textvariable=depth_var, width=6).grid(
-            row=row, column=2, padx=3, pady=2
+        eval_combo = ttk.Combobox(
+            parent,
+            textvariable=eval_var,
+            values=("ab_classic", "mcts_pe", "hybrid"),
+            state="readonly",
+            width=10,
+        )
+        eval_combo.grid(row=row, column=2, padx=3, pady=2)
+        ttk.Spinbox(parent, from_=1, to=8, textvariable=depth_var, width=5).grid(
+            row=row, column=3, padx=3, pady=2
         )
         ttk.Spinbox(
-            parent, from_=1, to=20000, increment=50, textvariable=iter_var, width=8
-        ).grid(row=row, column=3, padx=3, pady=2)
-        ttk.Entry(parent, textvariable=time_var, width=7).grid(
-            row=row, column=4, padx=3, pady=2
+            parent, from_=1, to=20000, increment=50, textvariable=iter_var, width=7
+        ).grid(row=row, column=4, padx=3, pady=2)
+        ttk.Entry(parent, textvariable=time_var, width=6).grid(
+            row=row, column=5, padx=3, pady=2
         )
 
     def _report_error(self, title: str, message: str) -> None:
@@ -491,9 +666,21 @@ class ChessGUI:
             self.eval_canvas.grid_remove()
         return bool(show)
 
-    def apply_preset(self, white_kind: str, black_kind: str, *, auto_start: bool = True) -> None:
+    def apply_preset(
+        self,
+        white_kind: str,
+        black_kind: str,
+        *,
+        white_eval: str | None = None,
+        black_eval: str | None = None,
+        auto_start: bool = True,
+    ) -> None:
         self.white_kind_var.set(white_kind)
         self.black_kind_var.set(black_kind)
+        if white_eval is not None:
+            self.white_eval_mode_var.set(white_eval)
+        if black_eval is not None:
+            self.black_eval_mode_var.set(black_eval)
         self.new_game(auto_start=auto_start)
 
     def _parse_delay_ms(self) -> int:
@@ -522,7 +709,7 @@ class ChessGUI:
                 depth=self.white_depth_var.get(),
                 iterations=self.white_iter_var.get(),
                 time_limit=self.white_time_var.get(),
-                rollout_max_plies=int(self.white_iter_var.get()) if self.white_kind_var.get() in ("mcts",) else 24,
+                rollout_max_plies=24,
                 seed=None,
                 claim_draw=new_controller.claim_draw,
                 eval_mode=self.white_eval_mode_var.get(),
@@ -532,7 +719,7 @@ class ChessGUI:
                 depth=self.black_depth_var.get(),
                 iterations=self.black_iter_var.get(),
                 time_limit=self.black_time_var.get(),
-                rollout_max_plies=int(self.black_iter_var.get()) if self.black_kind_var.get() in ("mcts",) else 24,
+                rollout_max_plies=24,
                 seed=None,
                 claim_draw=new_controller.claim_draw,
                 eval_mode=self.black_eval_mode_var.get(),
@@ -547,8 +734,8 @@ class ChessGUI:
         self.fen_var.set(target_fen)
         self.agents = {chess.WHITE: white_agent, chess.BLACK: black_agent}
         self.player_names = {
-            chess.WHITE: self._format_agent_label(self.white_kind_var.get()),
-            chess.BLACK: self._format_agent_label(self.black_kind_var.get()),
+            chess.WHITE: self._format_agent_label(self.white_kind_var.get(), self.white_eval_mode_var.get()),
+            chess.BLACK: self._format_agent_label(self.black_kind_var.get(), self.black_eval_mode_var.get()),
         }
         self.selected_square = None
         self.legal_targets = {}
@@ -565,15 +752,16 @@ class ChessGUI:
         return True
 
     @staticmethod
-    def _format_agent_label(kind: str) -> str:
+    def _format_agent_label(kind: str, eval_mode: str | None = None) -> str:
         norm = kind.strip().lower().replace("-", "_")
         if norm == "human":
             return "Human"
+        mode_suffix = f" [{eval_mode}]" if eval_mode else ""
         if norm in ("alpha_beta", "alphabeta"):
-            return "Alpha-Beta"
+            return f"Alpha-Beta{mode_suffix}"
         if norm == "mcts":
-            return "MCTS"
-        return kind
+            return f"MCTS{mode_suffix}"
+        return f"{kind}{mode_suffix}"
 
     def current_agent(self) -> ChessAI | None:
         return self.agents[self.controller.turn]
@@ -666,15 +854,17 @@ class ChessGUI:
     def _draw_eval_bar(self, board: chess.Board | None = None) -> None:
         if board is None:
             board = self.controller.board
+        bar_mode = getattr(self, "eval_bar_mode_var", None)
+        mode_val = bar_mode.get() if bar_mode is not None else "ab_classic"
         white_ratio, label, cp = compute_eval_bar_state(
-            board, claim_draw=self.controller.claim_draw
+            board, claim_draw=self.controller.claim_draw, eval_mode=mode_val
         )
         side_adv = (
             "Equal"
             if cp == 0
             else ("White advantage" if cp > 0 else "Black advantage")
         )
-        self.eval_text_var.set(f"Eval: {label} ({side_adv})")
+        self.eval_text_var.set(f"Eval ({mode_val}): {label} ({side_adv})")
 
         if not self.show_eval_var.get():
             return
@@ -793,20 +983,30 @@ class ChessGUI:
                         tags="legal_hint",
                     )
 
-            # Piece glyph
+            # Piece glyph (solid silhouette for both White and Black)
             piece = board.piece_at(square)
             if piece is not None:
                 glyph = UNICODE_PIECES[(piece.color, piece.piece_type)]
                 cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
                 if piece.color == chess.WHITE:
-                    # Single subtle drop shadow for white piece contrast on light squares
-                    self.board_canvas.create_text(
-                        cx + 1,
-                        cy + 1,
-                        text=glyph,
-                        fill="#333333",
-                        font=PIECE_FONT,
-                    )
+                    # Seal internal slits and create a crisp dark outline around the solid glyph
+                    for dx, dy in (
+                        (-2, 0),
+                        (2, 0),
+                        (0, -2),
+                        (0, 2),
+                        (-1, -1),
+                        (1, -1),
+                        (-1, 1),
+                        (1, 1),
+                    ):
+                        self.board_canvas.create_text(
+                            cx + dx,
+                            cy + dy,
+                            text=glyph,
+                            fill="#18191c",
+                            font=PIECE_FONT,
+                        )
                     self.board_canvas.create_text(
                         cx,
                         cy,
@@ -816,14 +1016,33 @@ class ChessGUI:
                         tags="piece",
                     )
                 else:
+                    for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+                        self.board_canvas.create_text(
+                            cx + dx,
+                            cy + dy,
+                            text=glyph,
+                            fill="#d4d4d8",
+                            font=PIECE_FONT,
+                        )
                     self.board_canvas.create_text(
                         cx,
                         cy,
                         text=glyph,
-                        fill="#1a1a1a",
+                        fill="#18191c",
                         font=PIECE_FONT,
                         tags="piece",
                     )
+
+        # Outer border around the 8x8 playing grid
+        grid_end = self.MARGIN + 8 * self.SQ_SIZE
+        self.board_canvas.create_rectangle(
+            self.MARGIN,
+            self.MARGIN,
+            grid_end,
+            grid_end,
+            outline="#3f4147",
+            width=2,
+        )
 
         # Draw file and rank coordinates
         for idx in range(8):
@@ -835,14 +1054,14 @@ class ChessGUI:
                 fx,
                 self.BOARD_PX - self.MARGIN // 2,
                 text=file_char,
-                fill="#cccccc",
+                fill="#b5bac1",
                 font=COORD_FONT,
             )
             self.board_canvas.create_text(
                 self.MARGIN // 2,
                 ry,
                 text=rank_char,
-                fill="#cccccc",
+                fill="#b5bac1",
                 font=COORD_FONT,
             )
 
@@ -931,6 +1150,7 @@ class ChessGUI:
     def _prompt_promotion_dialog(self, color: chess.Color) -> chess.PieceType:
         dialog = tk.Toplevel(self.root)
         dialog.title("Promote Pawn")
+        dialog.configure(bg="#2b2d31")
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.resizable(False, False)
@@ -940,19 +1160,19 @@ class ChessGUI:
             dialog,
             text="Choose promotion piece:",
             font=("Segoe UI", 10, "bold"),
-            padding=8,
+            padding=10,
         ).pack()
 
-        btn_frame = ttk.Frame(dialog, padding=8)
+        btn_frame = ttk.Frame(dialog, style="Card.TFrame", padding=10)
         btn_frame.pack()
         for label, piece_type in PROMOTION_PIECES:
             glyph = UNICODE_PIECES[(color, piece_type)]
             ttk.Button(
                 btn_frame,
                 text=f"{glyph} {label}",
-                width=16,
+                width=18,
                 command=lambda pt=piece_type: (choice.set(pt), dialog.destroy()),
-            ).pack(pady=2)
+            ).pack(pady=3)
 
         dialog.wait_window()
         return int(choice.get())

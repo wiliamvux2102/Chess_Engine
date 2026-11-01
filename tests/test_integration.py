@@ -18,7 +18,7 @@ from algorithms.mcts import MCTS
 from chess_system.ai_interface import ChessAI
 from experiments.benchmark import run_match
 from experiments.tournament import run_tournament, summarize
-from gui.app import ChessGUI, build_agent, compute_eval_bar_state
+from gui.app import ChessGUI, UNICODE_PIECES, build_agent, compute_eval_bar_state
 from main import main
 
 
@@ -31,23 +31,28 @@ class ProtocolAndEvalBarTests(unittest.TestCase):
 
     def test_build_agent_validation(self):
         self.assertIsNone(build_agent("human"))
-        ab = build_agent("alpha-beta", depth="2")
+        ab = build_agent("alpha-beta", depth="2", eval_mode="mcts_pe")
         self.assertIsInstance(ab, AlphaBetaAI)
         self.assertEqual(ab.depth, 2)
+        from algorithms.eval_registry import EvalMode
+        self.assertEqual(ab.eval_mode, EvalMode.MCTS_PE)
 
-        mcts = build_agent("mcts", iterations="20", seed=1)
+        mcts = build_agent("mcts", iterations="20", seed=1, eval_mode="ab_classic")
         self.assertIsInstance(mcts, MCTS)
         self.assertEqual(mcts.iterations, 20)
+        self.assertEqual(mcts.eval_mode, EvalMode.AB_CLASSIC)
 
         for bad_kwargs in (
             {"kind": "unknown"},
             {"kind": "alpha_beta", "depth": "0"},
             {"kind": "alpha_beta", "depth": "abc"},
+            {"kind": "alpha_beta", "depth": "2", "eval_mode": "invalid_mode"},
             {"kind": "mcts", "iterations": ""},
             {"kind": "mcts", "iterations": "-5"},
             {"kind": "mcts", "iterations": "10", "time_limit": "0"},
             {"kind": "mcts", "iterations": "10", "time_limit": "-1"},
             {"kind": "mcts", "iterations": "10", "time_limit": "abc"},
+            {"kind": "mcts", "iterations": "10", "eval_mode": "invalid_mode"},
         ):
             with self.subTest(bad_kwargs=bad_kwargs), self.assertRaises(ValueError):
                 build_agent(**bad_kwargs)
@@ -137,6 +142,13 @@ class GUIIntegrationTests(unittest.TestCase):
         gui.flip_board()
         self.assertTrue(gui.flipped)
         self.assertEqual(gui.square_to_grid(chess.A1), (7, 0))
+
+        # Verify all UNICODE_PIECES entries use solid glyphs and no hollow ones
+        solid_glyphs = {"♚", "♛", "♜", "♝", "♞", "♟"}
+        hollow_glyphs = {"♔", "♕", "♖", "♗", "♘", "♙"}
+        for (color, piece_type), glyph in UNICODE_PIECES.items():
+            self.assertIn(glyph, solid_glyphs)
+            self.assertNotIn(glyph, hollow_glyphs)
 
     def test_human_move_legal_highlights_and_interaction_errors(self):
         gui = self.gui = ChessGUI(

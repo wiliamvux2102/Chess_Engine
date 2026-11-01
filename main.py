@@ -43,6 +43,18 @@ def _add_gui_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--delay", type=int, default=300, help="Live AI vs AI move delay in ms (default: 300)"
     )
+    parser.add_argument(
+        "--white-eval-mode",
+        default="ab_classic",
+        choices=("ab_classic", "mcts_pe", "hybrid"),
+        help="White evaluation mode (default: ab_classic)",
+    )
+    parser.add_argument(
+        "--black-eval-mode",
+        default="hybrid",
+        choices=("ab_classic", "mcts_pe", "hybrid"),
+        help="Black evaluation mode (default: hybrid)",
+    )
     parser.add_argument("--fen", default=chess.STARTING_FEN, help="Starting FEN position")
     parser.add_argument(
         "--no-eval-bar",
@@ -82,6 +94,16 @@ def build_parser() -> argparse.ArgumentParser:
     match_parser.add_argument("--white-time", type=float, default=None)
     match_parser.add_argument("--black-time", type=float, default=None)
     match_parser.add_argument("--seed", type=int, default=42)
+    match_parser.add_argument(
+        "--white-eval-mode",
+        default="ab_classic",
+        choices=("ab_classic", "mcts_pe", "hybrid"),
+    )
+    match_parser.add_argument(
+        "--black-eval-mode",
+        default="hybrid",
+        choices=("ab_classic", "mcts_pe", "hybrid"),
+    )
     match_parser.add_argument("--fen", default=chess.STARTING_FEN)
     match_parser.add_argument("--max-plies", type=int, default=200)
     match_parser.add_argument("--output-dir", default=None)
@@ -120,6 +142,7 @@ def _run_cli_match(args: argparse.Namespace) -> int:
         iterations=args.white_iterations,
         time_limit=args.white_time,
         seed=args.seed,
+        eval_mode=args.white_eval_mode,
     )
     black_ai = build_agent(
         args.black,
@@ -127,10 +150,11 @@ def _run_cli_match(args: argparse.Namespace) -> int:
         iterations=args.black_iterations,
         time_limit=args.black_time,
         seed=args.seed,
+        eval_mode=args.black_eval_mode,
     )
     assert white_ai is not None and black_ai is not None
-    white_name = f"White({args.white})"
-    black_name = f"Black({args.black})"
+    white_name = f"White({args.white}[{args.white_eval_mode}])"
+    black_name = f"Black({args.black}[{args.black_eval_mode}])"
     result = run_match(
         white_ai,
         black_ai,
@@ -144,12 +168,14 @@ def _run_cli_match(args: argparse.Namespace) -> int:
                 "depth": args.white_depth,
                 "iterations": args.white_iterations,
                 "time_limit": args.white_time,
+                "eval_mode": args.white_eval_mode,
             },
             "black": {
                 "kind": args.black,
                 "depth": args.black_depth,
                 "iterations": args.black_iterations,
                 "time_limit": args.black_time,
+                "eval_mode": args.black_eval_mode,
             },
         },
     )
@@ -207,6 +233,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         black_iterations=args.black_iterations,
         white_time_limit=args.white_time,
         black_time_limit=args.black_time,
+        white_eval_mode=args.white_eval_mode,
+        black_eval_mode=args.black_eval_mode,
         move_delay_ms=args.delay,
         show_eval_bar=not args.no_eval_bar,
     )
