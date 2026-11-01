@@ -5,13 +5,15 @@ import random
 
 import chess
 from algorithms.mcts_node import MCTSNode
-from algorithms.mcts_rollout import cutoff_value, exchange_gain, position_score, rollout_move
+from algorithms.mcts_rollout import exchange_gain, rollout_move
+from algorithms.eval_registry import EvalMode, create_evaluator, create_cutoff_evaluator
 
 
 class MCTS:
     """Search a fresh UCT tree per move with fixed iterations and bounded rollouts.
 
     Simulation rewards use White's perspective: win +1, draw 0, loss -1.
+    Supports configurable evaluation modes via EvalMode.
     """
 
     def __init__(
@@ -22,11 +24,13 @@ class MCTS:
         rollout_max_plies: int = 80,
         seed: int | None = None,
         claim_draw: bool = True,
+        eval_mode: EvalMode | None = None,
     ):
         """Configure the iteration budget, UCT exploration and rollout limit.
 
         rollout_max_plies counts half-moves; zero evaluates without further play.
         seed controls a private RNG; claim_draw should match the controller.
+        eval_mode: Evaluation mode - AB_CLASSIC, MCTS_PE, or HYBRID.
         """
         if type(iterations) is not int or iterations < 1:
             raise ValueError("iterations must be a positive integer")
@@ -42,6 +46,9 @@ class MCTS:
             raise ValueError("seed must be an integer or None")
         if type(claim_draw) is not bool:
             raise ValueError("claim_draw must be a bool")
+
+        self.eval_mode = eval_mode if eval_mode is not None else EvalMode.MCTS_PE
+
         self.iterations = iterations
         self.exploration_constant = exploration_constant
         self.rollout_max_plies = rollout_max_plies
@@ -49,6 +56,10 @@ class MCTS:
         self.claim_draw = claim_draw
         self._rng = random.Random(seed)
         self.last_search_stats: dict[str, int] = {"iterations": 0, "rollouts": 0}
+
+        # Create evaluators based on mode
+        self._evaluator = create_evaluator(self.eval_mode, claim_draw)
+        self._cutoff_evaluator = create_cutoff_evaluator(self.eval_mode, claim_draw)
 
     def choose_move(self, board: chess.Board) -> chess.Move:
         """Choose a legal move without changing the input board or its history.
@@ -105,7 +116,9 @@ class MCTS:
                         priorities[move] = 0.0
                     safe.append(move)
                     continue
-                score = position_score(board) * (1 if not board.turn else -1)
+                # Use configured evaluator for move ordering
+                score = self._evaluator(board, ply=0)
+                score = score if not board.turn else -score
                 if gain < 0:
                     score += gain
                 priorities[move] = score
@@ -135,8 +148,9 @@ class MCTS:
     def _simulate(self, board: chess.Board) -> float:
         """Play a bounded continuation on a copy and return a White-perspective reward.
 
-        Return +1/0/-1 for a terminal result; otherwise use the cutoff estimate
-        in [-0.98, +0.98]. Check the outcome after the final permitted ply too.
+        Return +1/0/-1 for a terminal result; otherwise use configured evaluator
+        scaled to [-0.98, +0.98] via tanh. Check the outcome after the final
+        permitted ply too.
         """
         rollout = board.copy(stack=True)
         for _ in range(self.rollout_max_plies):
@@ -148,4 +162,5 @@ class MCTS:
         outcome = rollout.outcome(claim_draw=self.claim_draw)
         if outcome is not None:
             return 0.0 if outcome.winner is None else (1.0 if outcome.winner == chess.WHITE else -1.0)
-        return cutoff_value(rollout)
+        # Use configured cutoff evaluator
+        return self._cutoff_evaluator(rollout)

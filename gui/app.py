@@ -13,6 +13,7 @@ from typing import Callable
 import chess
 
 from algorithms.alpha_beta import AlphaBetaAI
+from algorithms.eval_registry import EvalMode
 from algorithms.evaluation import MATE_SCORE, evaluate
 from algorithms.mcts import MCTS
 from chess_system.ai_interface import ChessAI
@@ -110,6 +111,7 @@ def build_agent(
     rollout_max_plies: int | None = 24,
     seed: int | None = None,
     claim_draw: bool = True,
+    eval_mode: str | None = None,
 ) -> ChessAI | None:
     """Create a ChessAI instance from user/CLI parameters, or None for Human."""
     normalized = kind.strip().lower().replace("-", "_")
@@ -133,6 +135,16 @@ def build_agent(
         }
         if rollout_max_plies is not None:
             mcts_kwargs["rollout_max_plies"] = rollout_max_plies
+        if eval_mode is not None:
+            mode_map = {
+                "ab_classic": EvalMode.AB_CLASSIC,
+                "mcts_pe": EvalMode.MCTS_PE,
+                "hybrid": EvalMode.HYBRID,
+            }
+            if eval_mode.lower() in mode_map:
+                mcts_kwargs["eval_mode"] = mode_map[eval_mode.lower()]
+            else:
+                raise ValueError(f"Unknown eval_mode: {eval_mode}. Valid: {list(mode_map.keys())}")
         return MCTS(**mcts_kwargs)
     raise ValueError(f"Unknown player type: {kind!r}")
 
@@ -330,6 +342,18 @@ class ChessGUI:
             time_var=self.black_time_var,
         )
 
+        # Eval Mode Selection Row
+        eval_row = ttk.Frame(cfg_box)
+        eval_row.grid(row=3, column=0, columnspan=5, sticky="ew", pady=(6, 0))
+        ttk.Label(eval_row, text="MCTS Eval Mode:").pack(side="left", padx=(0, 6))
+        self.white_eval_mode_var = tk.StringVar(value="hybrid")
+        self.black_eval_mode_var = tk.StringVar(value="hybrid")
+        eval_modes = ["hybrid", "ab_classic", "mcts_pe"]
+        ttk.Combobox(eval_row, textvariable=self.white_eval_mode_var, values=eval_modes, state="readonly", width=12).pack(side="left", padx=2)
+        ttk.Label(eval_row, text="(White)").pack(side="left", padx=(0, 12))
+        ttk.Combobox(eval_row, textvariable=self.black_eval_mode_var, values=eval_modes, state="readonly", width=12).pack(side="left", padx=2)
+        ttk.Label(eval_row, text="(Black)").pack(side="left")
+
         # FEN & Delay Row
         fen_frame = ttk.Frame(cfg_box)
         fen_frame.grid(row=3, column=0, columnspan=5, sticky="ew", pady=(6, 0))
@@ -498,14 +522,20 @@ class ChessGUI:
                 depth=self.white_depth_var.get(),
                 iterations=self.white_iter_var.get(),
                 time_limit=self.white_time_var.get(),
+                rollout_max_plies=int(self.white_iter_var.get()) if self.white_kind_var.get() in ("mcts",) else 24,
+                seed=None,
                 claim_draw=new_controller.claim_draw,
+                eval_mode=self.white_eval_mode_var.get(),
             )
             black_agent = build_agent(
                 self.black_kind_var.get(),
                 depth=self.black_depth_var.get(),
                 iterations=self.black_iter_var.get(),
                 time_limit=self.black_time_var.get(),
+                rollout_max_plies=int(self.black_iter_var.get()) if self.black_kind_var.get() in ("mcts",) else 24,
+                seed=None,
                 claim_draw=new_controller.claim_draw,
+                eval_mode=self.black_eval_mode_var.get(),
             )
         except ValueError as exc:
             self._report_error("Invalid Configuration", str(exc))

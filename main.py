@@ -102,6 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
     tourney_parser.add_argument("--rounds", type=int, default=1, help="Paired rounds")
     tourney_parser.add_argument("--max-plies", type=int, default=200, help="Max plies/game")
     tourney_parser.add_argument(
+        "--eval-mode", type=str, default="hybrid",
+        choices=("ab_classic", "mcts_pe", "hybrid"),
+        help="MCTS evaluation mode (default: hybrid)"
+    )
+    tourney_parser.add_argument(
         "--output-dir", default=None, help="New directory to save PGN/CSV/JSON/standings.csv"
     )
 
@@ -160,6 +165,7 @@ def _run_cli_tournament(args: argparse.Namespace) -> int:
         "iterations": args.iterations,
         "time_limit": args.time_limit,
         "seed": args.seed,
+        "eval_mode": args.eval_mode,
     }
     matches = run_tournament(
         factory_a=lambda: build_agent("alpha_beta", depth=args.depth),  # type: ignore[return-value]
@@ -168,6 +174,7 @@ def _run_cli_tournament(args: argparse.Namespace) -> int:
             iterations=args.iterations,
             time_limit=args.time_limit,
             seed=args.seed,
+            eval_mode=args.eval_mode,
         ),
         name_a="Alpha-Beta",
         name_b="MCTS",
