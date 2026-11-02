@@ -3,7 +3,6 @@
 Allows switching between different evaluation functions:
 - 'ab_classic': Original Alpha-Beta evaluation (simple PST + material)
 - 'mcts_pe': MCTS PeSTO-style evaluation (tapered eval, SEE, tapered PSQT)
-- 'hybrid': MCTS evaluation with Alpha-Beta's terminal handling
 """
 
 import math
@@ -20,7 +19,6 @@ from algorithms.mcts_rollout import CENTIPAWN_SCALE
 class EvalMode(Enum):
     AB_CLASSIC = "ab_classic"
     MCTS_PE = "mcts_pe"
-    HYBRID = "hybrid"
 
 
 def create_evaluator(mode: EvalMode, claim_draw: bool = True) -> Callable[[chess.Board, int], float]:
@@ -38,11 +36,6 @@ def create_evaluator(mode: EvalMode, claim_draw: bool = True) -> Callable[[chess
             return mcts_position_score(board)
         return evaluator
 
-    elif mode == EvalMode.HYBRID:
-        def evaluator(board: chess.Board, ply: int = 0) -> float:
-            return float(ab_evaluate(board, ply=ply, claim_draw=claim_draw))
-        return evaluator
-
     raise ValueError(f"Unknown eval mode: {mode}")
 
 
@@ -53,7 +46,7 @@ def create_ab_evaluator(mode: EvalMode, claim_draw: bool = True) -> Callable[[ch
             return float(ab_evaluate(board, ply=ply, claim_draw=claim_draw))
         return evaluator
 
-    elif mode in (EvalMode.MCTS_PE, EvalMode.HYBRID):
+    elif mode == EvalMode.MCTS_PE:
         def evaluator(board: chess.Board, ply: int = 0) -> float:
             outcome = board.outcome(claim_draw=claim_draw)
             if outcome is not None:
@@ -82,17 +75,6 @@ def create_cutoff_evaluator(mode: EvalMode, claim_draw: bool = True) -> Callable
     elif mode == EvalMode.MCTS_PE:
         return lambda board: mcts_cutoff_value(board)
 
-    elif mode == EvalMode.HYBRID:
-        def evaluator(board: chess.Board) -> float:
-            outcome = board.outcome(claim_draw=claim_draw)
-            if outcome is not None:
-                return 0.0 if outcome.winner is None else (1.0 if outcome.winner == chess.WHITE else -1.0)
-            cp = ab_evaluate(board, claim_draw=claim_draw)
-            if abs(cp) >= AB_MATE_SCORE - 1000:
-                return 0.98 if cp > 0 else -0.98
-            return 0.98 * math.tanh(cp / 600.0)
-        return evaluator
-
     raise ValueError(f"Unknown eval mode: {mode}")
 
 
@@ -101,5 +83,4 @@ def get_eval_mode_name(mode: EvalMode) -> str:
     return {
         EvalMode.AB_CLASSIC: "Alpha-Beta Classic",
         EvalMode.MCTS_PE: "MCTS PeSTO/SEE",
-        EvalMode.HYBRID: "Hybrid (AB eval + MCTS scaling)",
     }[mode]

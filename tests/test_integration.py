@@ -205,6 +205,38 @@ class GUIIntegrationTests(unittest.TestCase):
         self.assertEqual(promoted.piece_type, chess.KNIGHT)
         self.assertEqual(gui.controller.board.peek().uci(), "a7a8n")
 
+        # Test Chess.com-style in-board promotion column (no external window)
+        gui2 = ChessGUI(
+            self.root,
+            fen=promo_fen,
+            white_kind="human",
+            black_kind="human",
+            error_handler=lambda t, m: self.errors.append((t, m)),
+        )
+        try:
+            gui2.select_square(chess.A7)
+            # First click on A8 opens the 4-square vertical column (A8=Q, A7=N, A6=R, A5=B)
+            self.assertFalse(gui2.select_square(chess.A8))
+            self.assertIsNotNone(gui2.pending_promotion)
+            self.assertTrue(len(gui2.board_canvas.find_withtag("promo_overlay")) > 0)
+            # Clicking A6 (3rd slot = Rook) promotes to Rook
+            self.assertTrue(gui2.select_square(chess.A6))
+            self.assertIsNone(gui2.pending_promotion)
+            self.assertEqual(gui2.controller.board.peek().uci(), "a7a8r")
+
+            # Verify dynamic parameter visibility per algorithm
+            w_ctrls = gui2.side_controls["white"]
+            self.assertEqual(w_ctrls["depth_frame"].winfo_manager(), "")
+            self.assertEqual(w_ctrls["iter_frame"].winfo_manager(), "")
+            gui2.white_kind_var.set("alpha_beta")
+            self.assertEqual(w_ctrls["depth_frame"].winfo_manager(), "pack")
+            self.assertEqual(w_ctrls["iter_frame"].winfo_manager(), "")
+            gui2.white_kind_var.set("mcts")
+            self.assertEqual(w_ctrls["depth_frame"].winfo_manager(), "")
+            self.assertEqual(w_ctrls["iter_frame"].winfo_manager(), "pack")
+        finally:
+            gui2.close()
+
     def test_human_vs_ai_and_stale_search_cancellation(self):
         gui = self.gui = ChessGUI(
             self.root,

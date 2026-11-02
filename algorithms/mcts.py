@@ -30,7 +30,7 @@ class MCTS:
 
         rollout_max_plies counts half-moves; zero evaluates without further play.
         seed controls a private RNG; claim_draw should match the controller.
-        eval_mode: Evaluation mode - AB_CLASSIC, MCTS_PE, or HYBRID.
+        eval_mode: Evaluation mode - AB_CLASSIC or MCTS_PE.
         """
         if type(iterations) is not int or iterations < 1:
             raise ValueError("iterations must be a positive integer")

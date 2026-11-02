@@ -46,14 +46,14 @@ def _add_gui_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--white-eval-mode",
         default="ab_classic",
-        choices=("ab_classic", "mcts_pe", "hybrid"),
+        choices=("ab_classic", "mcts_pe"),
         help="White evaluation mode (default: ab_classic)",
     )
     parser.add_argument(
         "--black-eval-mode",
-        default="hybrid",
-        choices=("ab_classic", "mcts_pe", "hybrid"),
-        help="Black evaluation mode (default: hybrid)",
+        default="mcts_pe",
+        choices=("ab_classic", "mcts_pe"),
+        help="Black evaluation mode (default: mcts_pe)",
     )
     parser.add_argument("--fen", default=chess.STARTING_FEN, help="Starting FEN position")
     parser.add_argument(
@@ -97,12 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
     match_parser.add_argument(
         "--white-eval-mode",
         default="ab_classic",
-        choices=("ab_classic", "mcts_pe", "hybrid"),
+        choices=("ab_classic", "mcts_pe"),
     )
     match_parser.add_argument(
         "--black-eval-mode",
-        default="hybrid",
-        choices=("ab_classic", "mcts_pe", "hybrid"),
+        default="mcts_pe",
+        choices=("ab_classic", "mcts_pe"),
     )
     match_parser.add_argument("--fen", default=chess.STARTING_FEN)
     match_parser.add_argument("--max-plies", type=int, default=200)
@@ -124,9 +124,16 @@ def build_parser() -> argparse.ArgumentParser:
     tourney_parser.add_argument("--rounds", type=int, default=1, help="Paired rounds")
     tourney_parser.add_argument("--max-plies", type=int, default=200, help="Max plies/game")
     tourney_parser.add_argument(
-        "--eval-mode", type=str, default="hybrid",
-        choices=("ab_classic", "mcts_pe", "hybrid"),
-        help="MCTS evaluation mode (default: hybrid)"
+        "--ab-eval-mode",
+        type=str,
+        default="ab_classic",
+        choices=("ab_classic", "mcts_pe"),
+        help="Alpha-Beta evaluation mode (default: ab_classic)",
+    )
+    tourney_parser.add_argument(
+        "--eval-mode", type=str, default="mcts_pe",
+        choices=("ab_classic", "mcts_pe"),
+        help="MCTS evaluation mode (default: mcts_pe)"
     )
     tourney_parser.add_argument(
         "--output-dir", default=None, help="New directory to save PGN/CSV/JSON/standings.csv"
@@ -186,7 +193,7 @@ def _run_cli_match(args: argparse.Namespace) -> int:
 
 
 def _run_cli_tournament(args: argparse.Namespace) -> int:
-    ab_cfg = {"depth": args.depth}
+    ab_cfg = {"depth": args.depth, "eval_mode": args.ab_eval_mode}
     mcts_cfg = {
         "iterations": args.iterations,
         "time_limit": args.time_limit,
@@ -194,7 +201,11 @@ def _run_cli_tournament(args: argparse.Namespace) -> int:
         "eval_mode": args.eval_mode,
     }
     matches = run_tournament(
-        factory_a=lambda: build_agent("alpha_beta", depth=args.depth),  # type: ignore[return-value]
+        factory_a=lambda: build_agent(  # type: ignore[return-value]
+            "alpha_beta",
+            depth=args.depth,
+            eval_mode=args.ab_eval_mode,
+        ),
         factory_b=lambda: build_agent(  # type: ignore[return-value]
             "mcts",
             iterations=args.iterations,

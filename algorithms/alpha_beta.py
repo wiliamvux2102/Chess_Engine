@@ -76,7 +76,6 @@ class AlphaBetaAI:
             mode_map = {
                 "ab_classic": EvalMode.AB_CLASSIC,
                 "mcts_pe": EvalMode.MCTS_PE,
-                "hybrid": EvalMode.HYBRID,
             }
             eval_mode = mode_map.get(eval_mode.lower(), EvalMode.AB_CLASSIC)
         self.eval_mode = eval_mode
