@@ -1,7 +1,6 @@
 # Chess Engine (Alpha-Beta & MCTS)
 
-Bài tập cờ vua AI hoàn chỉnh tích hợp thuật toán Alpha-Beta Pruning và Monte Carlo Tree Search (MCTS), giao diện đồ họa Tkinter (Human vs AI, Live AI vs AI, thanh Eval Bar phong cách Chess.com) cùng bộ công cụ thực nghiệm benchmark/tournament headless.
-
+Đồ án cờ vua AI hoàn chỉnh tích hợp thuật toán Alpha-Beta Pruning và Monte Carlo Tree Search (MCTS), giao diện đồ họa Tkinter (Human vs AI, Live AI vs AI, thanh Eval Bar phong cách Chess.com) cùng bộ công cụ thực nghiệm benchmark/tournament headless.
 ---
 
 ## 1. Cài đặt và Kiểm thử
