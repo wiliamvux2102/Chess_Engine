@@ -1,151 +1,104 @@
-# HW2 Chess
+# Chess Engine (Alpha-Beta & MCTS)
 
-Khung bài tập cờ vua của nhóm 4 thành viên. Phần của Chính đã triển khai:
-quản lý ván cờ, hợp đồng AI, benchmark và tournament. Thuật toán và GUI để
-file rỗng cho các thành viên phụ trách. Chưa có chương trình chơi cờ hoàn chỉnh.
+Bài tập cờ vua AI hoàn chỉnh tích hợp thuật toán Alpha-Beta Pruning và Monte Carlo Tree Search (MCTS), giao diện đồ họa Tkinter (Human vs AI, Live AI vs AI, thanh Eval Bar phong cách Chess.com) cùng bộ công cụ thực nghiệm benchmark/tournament headless.
 
-## Cài đặt và kiểm thử
+---
 
-Yêu cầu Python 3.10 trở lên. Trong PowerShell, tại thư mục `HW2_Chess`:
+## 1. Cài đặt và Kiểm thử
+
+Yêu cầu Python 3.10 trở lên. Trong terminal/PowerShell tại thư mục dự án:
 
 ```powershell
-$env:PYTHONUTF8 = "1"
+# Tạo và kích hoạt môi trường ảo
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\Activate.ps1
+
+# Cài đặt thư viện phụ thuộc
+pip install -r requirements.txt
+
+# Chạy toàn bộ test suite (unit & integration tests)
+python -m unittest discover -s tests -v
 ```
 
-Việc sử dụng python-chess cho luật cờ cần được giảng viên chấp thuận theo tài liệu
-phân công. Không sử dụng engine ngoài.
+---
 
-## Cấu trúc và người phụ trách
+## 2. Hướng dẫn sử dụng
+
+### 2.1. Khởi chạy Giao diện (GUI)
+
+```powershell
+# Khởi chạy GUI mặc định (Human vs AI)
+python main.py
+
+# Xem trực tiếp AI vs AI (Alpha-Beta depth 3 vs MCTS 100 simulations, trễ 300ms)
+python main.py --white alpha_beta --white-depth 3 --black mcts --black-iterations 100 --delay 300
+
+# Khởi chạy với cấu hình Evaluation Mode cụ thể
+python main.py --white alpha_beta --white-eval-mode mcts_pe --black mcts --black-eval-mode mcts_pe
+```
+
+**Tính năng nổi bật trên GUI:**
+- **Chế độ chơi:** Human vs AI, AI vs Human, AI vs AI (tự động phát, Pause/Resume, Step từng nước), Human vs Human.
+- **Thanh đánh giá (Eval Bar):** Hiển thị ưu thế thế cờ theo thời gian thực (đơn vị centipawn / tốt), tự động đổi hướng theo bàn cờ (`Flip Board`), có thể Bật/Tắt tức thì.
+- **Phong cấp trực quan:** Bảng chọn quân phong cấp (Hậu, Xe, Tượng, Mã) hiển thị ngay trên bàn cờ.
+- **Tùy biến tham số:** Thay đổi động theo thuật toán (Depth cho Alpha-Beta, Iterations cho MCTS, chuyển đổi Evaluation Mode).
+
+---
+
+### 2.2. Chạy Thực nghiệm Không Giao diện (Headless CLI)
+
+#### Đấu một trận đơn (Match)
+```powershell
+python main.py match --white alpha_beta --white-depth 3 --black mcts --black-iterations 100 --max-plies 200 --output-dir experiments/results/demo_match
+```
+
+#### Đấu giải đổi bên (Tournament)
+```powershell
+python main.py tournament --depth 2 --iterations 100 --rounds 5 --max-plies 500 --output-dir experiments/results/tourney_demo
+```
+Kết quả giải đấu được tự động xuất ra các tệp `.json`, `.csv`, `.pgn` và `standings.csv` tổng hợp.
+
+---
+
+## 3. Cấu trúc Dự án
 
 ```text
-HW2_Chess/
-├── main.py                         # QHuy, rỗng
-├── requirements.txt                # Chính
-├── README.md                       # Hướng dẫn hạ tầng của Chính
-├── chess_system/                   # Chính, đã triển khai
-│   ├── __init__.py
-│   ├── game_controller.py
-│   └── ai_interface.py
-├── algorithms/
-│   ├── __init__.py                 # Rỗng
-│   ├── alpha_beta.py               # Hải, rỗng
-│   ├── evaluation.py               # Hải, rỗng
-│   ├── mcts.py                     # Thạch, rỗng
-│   └── mcts_node.py                # Thạch, rỗng
-├── gui/                            # QHuy, file rỗng
-│   ├── __init__.py
-│   ├── app.py
-│   └── assets/
-├── experiments/                    # Chính, đã triển khai
-│   ├── __init__.py
-│   ├── benchmark.py
-│   ├── tournament.py
-│   └── results/
-├── tests/
-│   ├── __init__.py
-│   ├── test_game.py                # Chính
-│   ├── test_benchmark.py           # Chính
-│   ├── test_alpha_beta.py          # Hải, rỗng
-│   ├── test_mcts.py                # Thạch, rỗng
-│   └── test_integration.py         # QHuy, rỗng
-└── docs/                           # Nơi đặt report.pdf sau khi viết báo cáo
+Chess_Engine/
+├── main.py                     # Entrypoint điều khiển GUI và CLI runner
+├── requirements.txt            # Thư viện phụ thuộc (python-chess)
+├── README.md                   # Tài liệu hướng dẫn sử dụng
+├── chess_system/               # Quản lý trạng thái và luật cờ vua
+│   ├── ai_interface.py         # Protocol giao tiếp ChessAI
+│   └── game_controller.py      # Bộ điều khiển ván cờ, FIDE rules, claim_draw
+├── algorithms/                 # Thuật toán tìm kiếm và đánh giá
+│   ├── alpha_beta.py           # Alpha-Beta Pruning với sắp xếp nước đi MVV-LVA
+│   ├── evaluation.py           # Đánh giá tĩnh cổ điển (Material + PST)
+│   ├── mcts.py                 # MCTS engine (UCT selection, rollout, backprop)
+│   ├── mcts_node.py            # Cấu trúc nút cây tìm kiếm MCTS
+│   ├── mcts_rollout.py         # Rollout chính sách và PeSTO tapered evaluation
+│   └── eval_registry.py        # Quản lý chuyển đổi chế độ đánh giá
+├── gui/                        # Giao diện đồ họa Tkinter
+│   ├── app.py                  # Canvas 8x8, Eval Bar, Live AI vs AI, Promotion dialog
+│   └── assets/                 # Tài nguyên đồ họa bổ trợ
+├── experiments/                # Hạ tầng thực nghiệm và đối đầu
+│   ├── benchmark.py            # Chạy và lưu trận đấu đơn
+│   ├── tournament.py           # Giải đấu ghép cặp đổi bên (color-swapped)
+│   └── results/                # Thư mục lưu kết quả thực nghiệm
+├── tests/                      # Bộ kiểm thử tự động
+│   ├── test_game.py            # Kiểm thử GameController và luật cờ
+│   ├── test_benchmark.py       # Kiểm thử benchmark và tournament
+│   ├── test_alpha_beta.py      # Kiểm thử Alpha-Beta
+│   ├── test_mcts.py            # Kiểm thử MCTS
+│   └── test_integration.py     # Kiểm thử tích hợp GUI, AI, Eval Bar, CLI
+└── docs/                       # Tài liệu tham khảo dự án
 ```
 
-Không tạo PDF rỗng vì đó không phải một tài liệu PDF hợp lệ.
+---
 
-## GameController
+## 4. Thuật toán & Chế độ Đánh giá (Evaluation Modes)
 
-```python
-from chess_system.game_controller import GameController
+Hệ thống cho phép cấu hình độc lập hai cơ chế đánh giá thế cờ:
+- **`ab_classic`**: Đánh giá tĩnh truyền thống dựa trên chênh lệch giá trị quân cờ (Material) và bảng điểm vị trí quân (Piece-Square Tables).
+- **`mcts_pe`**: Đánh giá PeSTO nâng cao với nội suy giai đoạn ván cờ (Tapered Evaluation giữa Opening/Endgame), bảng vị trí nâng cao và Static Exchange Evaluation (SEE).
 
-game = GameController()
-game.push("e2e4")              # Hoặc truyền chess.Move
-print(game.turn)              # chess.WHITE / chess.BLACK
-print(game.legal_moves)       # Tuple nước đi hợp lệ
-print(game.result())          # GameResult(result, winner, termination)
-game.pop()                    # Hoàn tác một nước
-```
-
-`game.board` trả về bản sao có lịch sử, có thể đưa cho AI mà không làm thay đổi
-bàn cờ controller. `push()` kiểm tra nước đi hợp lệ, bao gồm nhập thành,
-en passant, phong cấp (`a7a8q`) và từ chối đi tiếp sau khi kết thúc ván.
-`pop()` trên ván chưa có nước đi phát sinh `IndexError`.
-
-Kết quả thống nhất: `1-0`, `0-1`, `1/2-1/2`, `*` (chưa kết thúc).
-Mặc định `claim_draw=True`: tự chấp nhận hòa khi đủ điều kiện yêu cầu hòa
-theo luật python-chess, kể cả khi có thể yêu cầu bằng nước đi tiếp theo.
-Truyền `claim_draw=False` nếu chỉ muốn áp dụng hòa tự động bắt buộc.
-GUI và các thuật toán cần dùng cùng chính sách này khi kiểm tra terminal state.
-
-## Hợp đồng cho Hải và Thạch
-
-Mỗi AI cung cấp phương thức:
-
-```python
-def choose_move(self, board: chess.Board) -> chess.Move:
-    ...
-```
-
-- Trả về một `chess.Move` hợp lệ. Runner không gọi AI trên thế cờ kết thúc.
-- Giữ nguyên FEN và lịch sử của board nhận vào khi trả về. Dùng `board.copy()`
-  hoặc cân bằng mọi `push()` bằng `pop()`, kể cả khi thoát sớm.
-- AI tự xử lý search depth, iterations hoặc time budget qua constructor.
-- Tùy chọn cập nhật `self.last_search_stats` sau mỗi lần tìm kiếm:
-  `{"depth": 3, "nodes": 1200}` cho Alpha-Beta hoặc
-  `{"iterations": 1000, "rollouts": 1000}` cho MCTS.
-  Mỗi metric là số nguyên không âm; metric không cung cấp ghi thành ô trống/null.
-  Không gộp node count Alpha-Beta với iterations/rollouts MCTS.
-- Với AI ngẫu nhiên, dùng bộ sinh ngẫu nhiên riêng và cấu hình seed để tái lập.
-
-`ChessAI` là Protocol để chú thích kiểu; không bắt buộc kế thừa.
-
-## Chạy benchmark và tournament sau khi có hai AI
-
-Các tên class và tham số dưới đây là ví dụ hợp đồng tích hợp. Hải và Thạch cần
-thống nhất tên thực tế; hiện các file thuật toán còn rỗng nên đoạn này chưa chạy được.
-Chạy script tích hợp tại thư mục gốc `HW2_Chess` để import đúng package.
-
-```python
-from algorithms.alpha_beta import AlphaBetaAI
-from algorithms.mcts import MCTSAI
-from experiments.tournament import run_tournament, summarize
-
-matches = run_tournament(
-    factory_a=lambda: AlphaBetaAI(depth=3),
-    factory_b=lambda: MCTSAI(iterations=1000, seed=42),
-    name_a="Alpha-Beta",
-    name_b="MCTS",
-    rounds=2,
-    max_plies=300,
-    config={
-        "Alpha-Beta": {"depth": 3},
-        "MCTS": {"iterations": 1000, "seed": 42},
-    },
-    output_dir="experiments/results/run_001",
-)
-print(summarize(matches))
-```
-
-Một opening × hai rounds × hai lượt đổi màu = bốn ván. Có thể truyền
-`openings=[fen1, fen2, ...]` để dùng nhiều thế cờ. Mỗi ván tạo AI mới từ factory.
-`config` là metadata do người gọi ghi, không tự thay đổi ngân sách của AI.
-Để so sánh công bằng, xác định ngân sách trước và ghi rõ cách so sánh trong báo cáo.
-
-Mỗi ván xuất `.json` (kết quả, cấu hình và từng nước), `.csv` (thời gian, metric
-từng nước), `.pgn` (phát lại ván cờ); `standings.csv` tổng hợp thắng/hòa/thua,
-chưa hoàn tất, số nước từng AI và tổng thời gian suy nghĩ. Thời gian dùng
-`perf_counter`, chỉ đo lời gọi `choose_move`, không gồm xuất file hay vẽ GUI.
-`plies` tính theo nửa lượt: mỗi lần một bên đi là một ply.
-
-`max_plies` giới hạn độ dài ván, không giới hạn thời gian thực thi AI.
-Ván chạm giới hạn có kết quả `*`, termination `MOVE_LIMIT`, được đếm riêng
-ở `unfinished`. AI lỗi, sửa input hoặc trả nước bất hợp lệ sẽ làm runner báo lỗi
-để sửa; không tự chuyển thành thua. Kết quả từng ván được lưu ngay khi hoàn tất.
-Thư mục output tournament phải chưa tồn tại để tránh ghi đè thí nghiệm cũ.
-
-Muốn chạy riêng một ván, dùng `run_match(...)` và `save_match(match, folder, id)`
-trong `experiments.benchmark`. Các AI giả chỉ có trong file test để kiểm tra
-hạ tầng; không phải thuật toán dùng cho bài nộp.
+Tất cả AI tuân thủ giao thức `choose_move(board: chess.Board) -> chess.Move`, không làm thay đổi bàn cờ gốc và hỗ trợ xuất chỉ số tìm kiếm (`last_search_stats`).
