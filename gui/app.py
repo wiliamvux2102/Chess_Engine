@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import queue
 import threading
 import tkinter as tk
@@ -12,191 +11,58 @@ from typing import Callable
 
 import chess
 
-from algorithms.alpha_beta import AlphaBetaAI
-from algorithms.eval_registry import EvalMode
-from algorithms.evaluation import MATE_SCORE, evaluate
-from algorithms.mcts import MCTS
-from algorithms.mcts_rollout import position_score as mcts_position_score
 from chess_system.ai_interface import ChessAI
 from chess_system.game_controller import GameController
-
-# Both White and Black use the solid-filled Unicode chess glyphs (U+265A..U+265F)
-# so White pieces are completely solid inside rather than hollow wireframe outlines.
-UNICODE_PIECES: dict[tuple[chess.Color, chess.PieceType], str] = {
-    (chess.WHITE, chess.KING): "♚",
-    (chess.WHITE, chess.QUEEN): "♛",
-    (chess.WHITE, chess.ROOK): "♜",
-    (chess.WHITE, chess.BISHOP): "♝",
-    (chess.WHITE, chess.KNIGHT): "♞",
-    (chess.WHITE, chess.PAWN): "♟",
-    (chess.BLACK, chess.KING): "♚",
-    (chess.BLACK, chess.QUEEN): "♛",
-    (chess.BLACK, chess.ROOK): "♜",
-    (chess.BLACK, chess.BISHOP): "♝",
-    (chess.BLACK, chess.KNIGHT): "♞",
-    (chess.BLACK, chess.PAWN): "♟",
-}
-
-PROMOTION_PIECES: tuple[tuple[str, chess.PieceType], ...] = (
-    ("Queen", chess.QUEEN),
-    ("Knight", chess.KNIGHT),
-    ("Rook", chess.ROOK),
-    ("Bishop", chess.BISHOP),
+from gui.agent_factory import (
+    build_agent,
+    format_search_stats,
+    parse_optional_float,
+    parse_optional_int,
+)
+from gui.board_view import (
+    draw_board,
+    get_promotion_targets,
+    pixel_to_square,
+    square_to_grid,
+)
+from gui.eval_bar import compute_eval_bar_state, render_eval_bar
+from gui.theme import (
+    BOARD_PX,
+    COORD_FONT,
+    EVAL_FONT,
+    EVAL_WIDTH,
+    PIECE_FONT,
+    PROMO_LABEL_FONT,
+    PROMOTION_PIECES,
+    SQ_SIZE,
+    UNICODE_PIECES,
+    setup_theme,
 )
 
-PIECE_FONT: tuple[str, int] = ("Segoe UI Symbol", 34)
-PROMO_LABEL_FONT: tuple[str, int, str] = ("Segoe UI", 8, "bold")
-COORD_FONT: tuple[str, int, str] = ("Segoe UI", 9, "bold")
-EVAL_FONT: tuple[str, int, str] = ("Segoe UI", 8, "bold")
-
-
-def compute_eval_bar_state(
-    board: chess.Board,
-    *,
-    claim_draw: bool = True,
-    eval_mode: str | EvalMode = "ab_classic",
-) -> tuple[float, str, float | int]:
-    """Return (white_ratio in [0.0, 1.0], display_label, raw_centipawn_score)."""
-    outcome = board.outcome(claim_draw=claim_draw)
-    if outcome is not None:
-        if outcome.winner == chess.WHITE:
-            return 1.0, "1-0", MATE_SCORE
-        if outcome.winner == chess.BLACK:
-            return 0.0, "0-1", -MATE_SCORE
-        return 0.5, "0.0", 0
-
-    mode_str = eval_mode.value if isinstance(eval_mode, EvalMode) else str(eval_mode).lower()
-    if mode_str == "mcts_pe":
-        cp = mcts_position_score(board)
-    else:
-        cp = evaluate(board, claim_draw=False)
-
-    if abs(cp) >= MATE_SCORE - 1000:
-        return (1.0, "M", cp) if cp > 0 else (0.0, "-M", cp)
-
-    # ponytail: logistic centipawn squash (divisor 400); upgrade to WDL lookup if NNUE added
-    ratio = 1.0 / (1.0 + math.exp(-cp / 400.0))
-    white_ratio = max(0.05, min(0.95, ratio))
-    pawns = cp / 100.0
-    label = f"{pawns:+.1f}" if abs(pawns) >= 0.05 else "0.0"
-    return white_ratio, label, cp
-
-
-def parse_optional_int(value: str | int | None, field_name: str) -> int | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        parsed = int(text)
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must be a positive integer") from exc
-    if parsed < 1:
-        raise ValueError(f"{field_name} must be >= 1")
-    return parsed
-
-
-def parse_optional_float(value: str | float | None, field_name: str) -> float | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        parsed = float(text)
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must be a positive number") from exc
-    if not math.isfinite(parsed) or parsed <= 0:
-        raise ValueError(f"{field_name} must be > 0")
-    return parsed
-
-
-def build_agent(
-    kind: str,
-    *,
-    depth: str | int | None = 3,
-    iterations: str | int | None = 100,
-    time_limit: str | float | None = None,
-    rollout_max_plies: int | None = 24,
-    seed: int | None = None,
-    claim_draw: bool = True,
-    eval_mode: str | None = None,
-) -> ChessAI | None:
-    """Create a ChessAI instance from user/CLI parameters, or None for Human."""
-    normalized = kind.strip().lower().replace("-", "_")
-    if normalized == "human":
-        return None
-    if normalized in ("alpha_beta", "alphabeta"):
-        parsed_depth = parse_optional_int(depth, "Alpha-Beta depth")
-        if parsed_depth is None:
-            raise ValueError("Alpha-Beta depth is required")
-        ab_kwargs: dict[str, object] = {
-            "depth": parsed_depth,
-            "claim_draw": claim_draw,
-        }
-        if eval_mode is not None:
-            mode_map = {
-                "ab_classic": EvalMode.AB_CLASSIC,
-                "mcts_pe": EvalMode.MCTS_PE,
-            }
-            if eval_mode.lower() in mode_map:
-                ab_kwargs["eval_mode"] = mode_map[eval_mode.lower()]
-            else:
-                raise ValueError(f"Unknown eval_mode: {eval_mode}. Valid: {list(mode_map.keys())}")
-        return AlphaBetaAI(**ab_kwargs)
-    if normalized == "mcts":
-        parsed_iter = parse_optional_int(iterations, "MCTS simulations")
-        if time_limit is not None and str(time_limit).strip():
-            parse_optional_float(time_limit, "MCTS time budget")
-        if parsed_iter is None:
-            raise ValueError("MCTS requires simulations")
-        mcts_kwargs: dict[str, object] = {
-            "iterations": parsed_iter,
-            "seed": seed,
-            "claim_draw": claim_draw,
-        }
-        if rollout_max_plies is not None:
-            mcts_kwargs["rollout_max_plies"] = rollout_max_plies
-        if eval_mode is not None:
-            mode_map = {
-                "ab_classic": EvalMode.AB_CLASSIC,
-                "mcts_pe": EvalMode.MCTS_PE,
-            }
-            if eval_mode.lower() in mode_map:
-                mcts_kwargs["eval_mode"] = mode_map[eval_mode.lower()]
-            else:
-                raise ValueError(f"Unknown eval_mode: {eval_mode}. Valid: {list(mode_map.keys())}")
-        return MCTS(**mcts_kwargs)
-    raise ValueError(f"Unknown player type: {kind!r}")
-
-
-def format_search_stats(stats: dict[str, int] | None, elapsed: float) -> str:
-    if not stats:
-        return f"{elapsed:.3f}s"
-    parts = [f"{elapsed:.3f}s"]
-    for key in ("depth", "nodes", "cutoffs", "iterations", "rollouts"):
-        if stats.get(key) is not None:
-            parts.append(f"{key}={stats[key]}")
-    return " | ".join(parts)
+__all__ = [
+    "ChessGUI",
+    "UNICODE_PIECES",
+    "PROMOTION_PIECES",
+    "PIECE_FONT",
+    "COORD_FONT",
+    "EVAL_FONT",
+    "PROMO_LABEL_FONT",
+    "build_agent",
+    "compute_eval_bar_state",
+    "format_search_stats",
+    "parse_optional_int",
+    "parse_optional_float",
+    "launch_gui",
+]
 
 
 class ChessGUI:
     """Interactive 8x8 Chess GUI supporting Human vs AI and Live AI vs AI."""
 
-    SQ_SIZE = 68
+    SQ_SIZE = SQ_SIZE
     MARGIN = 26
-    BOARD_PX = SQ_SIZE * 8 + MARGIN * 2
-    EVAL_WIDTH = 40
-
-    LIGHT_SQ = "#ebecd0"
-    DARK_SQ = "#739552"
-    SELECTED_SQ = "#bbcb2b"
-    LAST_MOVE_LIGHT = "#f5f682"
-    LAST_MOVE_DARK = "#b9ca43"
-    CHECK_SQ = "#e53935"
-    EVAL_WHITE_BG = "#f0f0f0"
-    EVAL_BLACK_BG = "#262421"
+    BOARD_PX = BOARD_PX
+    EVAL_WIDTH = EVAL_WIDTH
 
     def __init__(
         self,
@@ -219,17 +85,19 @@ class ChessGUI:
         auto_start: bool = True,
         promotion_chooser: Callable[[chess.Color], chess.PieceType] | None = None,
         error_handler: Callable[[str, str], None] | None = None,
-    ):
+    ) -> None:
         self.owns_root = root is None
-        self.root = root if root is not None else tk.Tk()
-        self.root.title("Chess Engine — Alpha-Beta & MCTS")
-        self.root.configure(bg="#16171a")
-
-        self.promotion_chooser = promotion_chooser
-        self.error_handler = error_handler or messagebox.showerror
-        self.last_error: str | None = None
+        self.root = tk.Tk() if self.owns_root else root
+        if self.owns_root:
+            self.root.title("Chess Engine — 8x8 GUI (Human vs AI & Live AI vs AI)")
+            self.root.geometry("1060x680")
+            self.root.minsize(980, 640)
 
         self.controller = GameController(fen, claim_draw=True)
+        self.promotion_chooser = promotion_chooser
+        self.error_handler = error_handler or (lambda title, msg: messagebox.showerror(title, msg))
+        self.last_error: str | None = None
+
         self.agents: dict[chess.Color, ChessAI | None] = {
             chess.WHITE: None,
             chess.BLACK: None,
@@ -291,134 +159,7 @@ class ChessGUI:
             self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def _setup_theme(self) -> None:
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-
-        bg_main = "#16171a"
-        bg_card = "#23252a"
-        bg_subcard = "#2c2f36"
-        bg_input = "#353841"
-        bg_hover = "#444854"
-        accent = "#81b64c"
-        accent_hover = "#95c95e"
-        fg_main = "#f3f4f6"
-        fg_muted = "#9ca3af"
-        border = "#383b44"
-
-        style.configure("TFrame", background=bg_main)
-        style.configure("Card.TFrame", background=bg_card)
-        style.configure("SubCard.TFrame", background=bg_subcard)
-        style.configure(
-            "TLabelframe",
-            background=bg_card,
-            bordercolor=border,
-            darkcolor=border,
-            lightcolor=border,
-            relief="solid",
-            borderwidth=1,
-        )
-        style.configure(
-            "TLabelframe.Label",
-            background=bg_card,
-            foreground=accent,
-            font=("Segoe UI", 9, "bold"),
-        )
-        style.configure(
-            "TLabel",
-            background=bg_card,
-            foreground=fg_main,
-            font=("Segoe UI", 9),
-        )
-        style.configure(
-            "SubCard.TLabel",
-            background=bg_subcard,
-            foreground=fg_main,
-            font=("Segoe UI", 9),
-        )
-        style.configure(
-            "SubMuted.TLabel",
-            background=bg_subcard,
-            foreground=fg_muted,
-            font=("Segoe UI", 8, "bold"),
-        )
-        style.configure(
-            "Muted.TLabel",
-            background=bg_card,
-            foreground=fg_muted,
-            font=("Segoe UI", 9),
-        )
-        style.configure(
-            "TButton",
-            background=bg_input,
-            foreground=fg_main,
-            bordercolor=border,
-            focuscolor=bg_input,
-            font=("Segoe UI", 9, "bold"),
-            padding=(9, 6),
-        )
-        style.map(
-            "TButton",
-            background=[("active", bg_hover), ("pressed", "#4e5260")],
-            foreground=[("active", "#ffffff")],
-        )
-        style.configure(
-            "Accent.TButton",
-            background=accent,
-            foreground="#16171a",
-            bordercolor="#6a9a3b",
-            focuscolor=accent,
-            font=("Segoe UI", 9, "bold"),
-            padding=(10, 6),
-        )
-        style.map(
-            "Accent.TButton",
-            background=[("active", accent_hover), ("pressed", "#6a9a3b")],
-            foreground=[("active", "#111214")],
-        )
-        style.configure(
-            "TCheckbutton",
-            background=bg_card,
-            foreground=fg_main,
-            font=("Segoe UI", 9),
-        )
-        style.map(
-            "TCheckbutton",
-            background=[("active", bg_card)],
-            foreground=[("active", "#ffffff")],
-        )
-        style.configure(
-            "TCombobox",
-            fieldbackground=bg_input,
-            background=bg_input,
-            foreground=fg_main,
-            arrowcolor=fg_main,
-            bordercolor=border,
-        )
-        style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", bg_input)],
-            selectbackground=[("readonly", bg_input)],
-            selectforeground=[("readonly", fg_main)],
-            foreground=[("readonly", fg_main)],
-        )
-        style.configure(
-            "TSpinbox",
-            fieldbackground=bg_input,
-            background=bg_input,
-            foreground=fg_main,
-            arrowcolor=fg_main,
-            bordercolor=border,
-        )
-        style.configure(
-            "TEntry",
-            fieldbackground=bg_input,
-            foreground=fg_main,
-            insertcolor=fg_main,
-            bordercolor=border,
-        )
+        setup_theme(self.root)
 
     def _build_ui(self) -> None:
         main_frame = ttk.Frame(self.root, padding=14)
@@ -742,14 +483,14 @@ class ChessGUI:
         white_eval: str | None = None,
         black_eval: str | None = None,
         auto_start: bool = True,
-    ) -> None:
+    ) -> bool:
         self.white_kind_var.set(white_kind)
         self.black_kind_var.set(black_kind)
-        if white_eval is not None:
+        if white_eval:
             self.white_eval_mode_var.set(white_eval)
-        if black_eval is not None:
+        if black_eval:
             self.black_eval_mode_var.set(black_eval)
-        self.new_game(auto_start=auto_start)
+        return self.new_game(auto_start=auto_start)
 
     def _parse_delay_ms(self) -> int:
         try:
@@ -890,30 +631,32 @@ class ChessGUI:
         # If Human vs AI and it is currently Human's turn, undo both AI and Human moves if possible
         current_is_human = self.current_agent() is None
         other_is_ai = self.agents[not self.controller.turn] is not None
-        plies_to_pop = 2 if (current_is_human and other_is_ai and len(board_stack) >= 2) else 1
-
-        for _ in range(plies_to_pop):
-            try:
-                self.controller.pop()
-            except IndexError:
-                break
+        if current_is_human and other_is_ai and len(board_stack) >= 2:
+            self.controller.pop()
+            self.controller.pop()
+            if len(self.move_log) >= 2:
+                self.move_log.pop()
+                self.move_log.pop()
+        else:
+            self.controller.pop()
             if self.move_log:
                 self.move_log.pop()
-                self.history_list.delete(tk.END)
 
-        current_stack = self.controller.board.move_stack
-        self.last_move = current_stack[-1] if current_stack else None
         self.selected_square = None
         self.legal_targets = {}
         self.pending_promotion = None
         self.hover_promo_sq = None
+        self.last_move = self.controller.board.peek() if self.controller.board.move_stack else None
 
-        # If the resulting turn is an AI, pause so it doesn't immediately redo the move
-        if self.current_agent() is not None:
-            self.paused = True
-            self.pause_btn_text.set("Resume")
+        # Rebuild history listbox
+        self.history_list.delete(0, tk.END)
+        for line in self.move_log:
+            self.history_list.insert(tk.END, line)
+        if self.move_log:
+            self.history_list.see(tk.END)
 
         self._refresh_ui()
+        self._maybe_schedule_ai()
         return True
 
     # ============================================================
@@ -921,20 +664,10 @@ class ChessGUI:
     # ============================================================
 
     def square_to_grid(self, square: chess.Square) -> tuple[int, int]:
-        file_idx = chess.square_file(square)
-        rank_idx = chess.square_rank(square)
-        if self.flipped:
-            return 7 - file_idx, rank_idx
-        return file_idx, 7 - rank_idx
+        return square_to_grid(square, self.flipped)
 
     def pixel_to_square(self, x: int, y: int) -> chess.Square | None:
-        col = (x - self.MARGIN) // self.SQ_SIZE
-        row = (y - self.MARGIN) // self.SQ_SIZE
-        if not (0 <= col < 8 and 0 <= row < 8):
-            return None
-        file_idx = 7 - col if self.flipped else col
-        rank_idx = row if self.flipped else 7 - row
-        return chess.square(file_idx, rank_idx)
+        return pixel_to_square(x, y, self.flipped)
 
     def _refresh_ui(self, board: chess.Board | None = None) -> None:
         if board is None:
@@ -948,336 +681,29 @@ class ChessGUI:
             board = self.controller.board
         bar_mode = getattr(self, "eval_bar_mode_var", None)
         mode_val = bar_mode.get() if bar_mode is not None else "ab_classic"
-        white_ratio, label, cp = compute_eval_bar_state(
-            board, claim_draw=self.controller.claim_draw, eval_mode=mode_val
-        )
-        side_adv = (
-            "Equal"
-            if cp == 0
-            else ("White advantage" if cp > 0 else "Black advantage")
-        )
-        self.eval_text_var.set(f"Eval ({mode_val}): {label} ({side_adv})")
-
-        if not self.show_eval_var.get():
-            return
-
-        self.eval_canvas.delete("all")
-        top_y = self.MARGIN
-        bar_h = self.SQ_SIZE * 8
-        bot_y = top_y + bar_h
-        w = self.EVAL_WIDTH
-
-        # Determine top vs bottom colors based on board orientation
-        if not self.flipped:
-            # White at bottom, Black at top
-            top_ratio = 1.0 - white_ratio
-            top_color, bot_color = self.EVAL_BLACK_BG, self.EVAL_WHITE_BG
-            white_on_bottom = True
-        else:
-            # Black at bottom, White at top
-            top_ratio = white_ratio
-            top_color, bot_color = self.EVAL_WHITE_BG, self.EVAL_BLACK_BG
-            white_on_bottom = False
-
-        split_y = top_y + int(round(bar_h * top_ratio))
-
-        self.eval_canvas.create_rectangle(
-            2, top_y, w - 2, split_y, fill=top_color, outline=""
-        )
-        self.eval_canvas.create_rectangle(
-            2, split_y, w - 2, bot_y, fill=bot_color, outline=""
-        )
-        self.eval_canvas.create_rectangle(
-            2, top_y, w - 2, bot_y, outline="#555555", width=1
-        )
-
-        # Midline tick mark at 50%
-        mid_y = top_y + bar_h // 2
-        self.eval_canvas.create_line(2, mid_y, w - 2, mid_y, fill="#888888", width=1)
-
-        # Place score text in the advantaged side's end (like Chess.com)
-        white_winning = cp >= 0
-        place_at_bottom = (white_winning and white_on_bottom) or (
-            not white_winning and not white_on_bottom
-        )
-        if place_at_bottom:
-            text_y = bot_y - 11
-            text_fg = "#262421" if bot_color == self.EVAL_WHITE_BG else "#f0f0f0"
-        else:
-            text_y = top_y + 11
-            text_fg = "#262421" if top_color == self.EVAL_WHITE_BG else "#f0f0f0"
-
-        self.eval_canvas.create_text(
-            w // 2,
-            text_y,
-            text=label,
-            fill=text_fg,
-            font=EVAL_FONT,
-            tags="eval_label",
+        render_eval_bar(
+            self.eval_canvas,
+            board,
+            flipped=self.flipped,
+            show_eval=self.show_eval_var.get(),
+            eval_mode=mode_val,
+            claim_draw=self.controller.claim_draw,
+            eval_text_var=self.eval_text_var,
         )
 
     def _draw_board(self, board: chess.Board | None = None) -> None:
         if board is None:
             board = self.controller.board
-        self.board_canvas.delete("all")
-        king_in_check_sq = board.king(board.turn) if board.is_check() else None
-        last_squares = (
-            {self.last_move.from_square, self.last_move.to_square}
-            if self.last_move is not None
-            else set()
+        draw_board(
+            self.board_canvas,
+            board,
+            flipped=self.flipped,
+            selected_square=self.selected_square,
+            legal_targets=self.legal_targets,
+            last_move=self.last_move,
+            pending_promotion=self.pending_promotion,
+            hover_promo_sq=self.hover_promo_sq,
         )
-
-        for square in chess.SQUARES:
-            col, row = self.square_to_grid(square)
-            x1 = self.MARGIN + col * self.SQ_SIZE
-            y1 = self.MARGIN + row * self.SQ_SIZE
-            x2 = x1 + self.SQ_SIZE
-            y2 = y1 + self.SQ_SIZE
-
-            is_light = (chess.square_file(square) + chess.square_rank(square)) % 2 == 1
-            fill = self.LIGHT_SQ if is_light else self.DARK_SQ
-            if square in last_squares:
-                fill = self.LAST_MOVE_LIGHT if is_light else self.LAST_MOVE_DARK
-            if square == self.selected_square:
-                fill = self.SELECTED_SQ
-            if square == king_in_check_sq:
-                fill = self.CHECK_SQ
-
-            self.board_canvas.create_rectangle(
-                x1, y1, x2, y2, fill=fill, outline="", tags=f"sq_{square}"
-            )
-
-            # Legal target indicator
-            if square in self.legal_targets:
-                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                if board.piece_at(square) is not None or (
-                    self.selected_square is not None
-                    and board.is_en_passant(self.legal_targets[square][0])
-                ):
-                    self.board_canvas.create_oval(
-                        x1 + 4,
-                        y1 + 4,
-                        x2 - 4,
-                        y2 - 4,
-                        outline="#3a6b35",
-                        width=4,
-                        tags="legal_hint",
-                    )
-                else:
-                    r = 9
-                    self.board_canvas.create_oval(
-                        cx - r,
-                        cy - r,
-                        cx + r,
-                        cy + r,
-                        fill="#4a7846",
-                        outline="",
-                        tags="legal_hint",
-                    )
-
-            # Piece glyph (solid silhouette for both White and Black)
-            piece = board.piece_at(square)
-            if piece is not None:
-                glyph = UNICODE_PIECES[(piece.color, piece.piece_type)]
-                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                if piece.color == chess.WHITE:
-                    # Seal internal slits and create a crisp dark outline around the solid glyph
-                    for dx, dy in (
-                        (-2, 0),
-                        (2, 0),
-                        (0, -2),
-                        (0, 2),
-                        (-1, -1),
-                        (1, -1),
-                        (-1, 1),
-                        (1, 1),
-                    ):
-                        self.board_canvas.create_text(
-                            cx + dx,
-                            cy + dy,
-                            text=glyph,
-                            fill="#18191c",
-                            font=PIECE_FONT,
-                        )
-                    self.board_canvas.create_text(
-                        cx,
-                        cy,
-                        text=glyph,
-                        fill="#ffffff",
-                        font=PIECE_FONT,
-                        tags="piece",
-                    )
-                else:
-                    for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
-                        self.board_canvas.create_text(
-                            cx + dx,
-                            cy + dy,
-                            text=glyph,
-                            fill="#d4d4d8",
-                            font=PIECE_FONT,
-                        )
-                    self.board_canvas.create_text(
-                        cx,
-                        cy,
-                        text=glyph,
-                        fill="#18191c",
-                        font=PIECE_FONT,
-                        tags="piece",
-                    )
-
-        # Outer border around the 8x8 playing grid
-        grid_end = self.MARGIN + 8 * self.SQ_SIZE
-        self.board_canvas.create_rectangle(
-            self.MARGIN,
-            self.MARGIN,
-            grid_end,
-            grid_end,
-            outline="#3f4147",
-            width=2,
-        )
-
-        # Draw file and rank coordinates
-        for idx in range(8):
-            file_char = chess.FILE_NAMES[7 - idx if self.flipped else idx]
-            rank_char = chess.RANK_NAMES[idx if self.flipped else 7 - idx]
-            fx = self.MARGIN + idx * self.SQ_SIZE + self.SQ_SIZE // 2
-            ry = self.MARGIN + idx * self.SQ_SIZE + self.SQ_SIZE // 2
-            self.board_canvas.create_text(
-                fx,
-                self.BOARD_PX - self.MARGIN // 2,
-                text=file_char,
-                fill="#b5bac1",
-                font=COORD_FONT,
-            )
-            self.board_canvas.create_text(
-                self.MARGIN // 2,
-                ry,
-                text=rank_char,
-                fill="#b5bac1",
-                font=COORD_FONT,
-            )
-
-        # Chess.com-style in-board promotion column overlay
-        if self.pending_promotion is not None:
-            promo_targets = self._get_promotion_targets()
-            if promo_targets:
-                cols = [c for _, c, _, _, _ in promo_targets]
-                rows = [r for _, _, r, _, _ in promo_targets]
-                px1 = self.MARGIN + min(cols) * self.SQ_SIZE
-                py1 = self.MARGIN + min(rows) * self.SQ_SIZE
-                px2 = self.MARGIN + (max(cols) + 1) * self.SQ_SIZE
-                py2 = self.MARGIN + (max(rows) + 1) * self.SQ_SIZE
-
-                # Drop shadow + elevated card container
-                self.board_canvas.create_rectangle(
-                    px1 + 3,
-                    py1 + 3,
-                    px2 + 3,
-                    py2 + 3,
-                    fill="#0d0e10",
-                    outline="",
-                    tags="promo_overlay",
-                )
-                self.board_canvas.create_rectangle(
-                    px1,
-                    py1,
-                    px2,
-                    py2,
-                    fill="#f8f9fa",
-                    outline="#81b64c",
-                    width=3,
-                    tags="promo_overlay",
-                )
-
-                promo_color = board.turn
-                for opt_sq, col, row, pt, label in promo_targets:
-                    sx1 = self.MARGIN + col * self.SQ_SIZE
-                    sy1 = self.MARGIN + row * self.SQ_SIZE
-                    sx2 = sx1 + self.SQ_SIZE
-                    sy2 = sy1 + self.SQ_SIZE
-                    cx, cy = (sx1 + sx2) // 2, (sy1 + sy2) // 2
-                    hovered = opt_sq == self.hover_promo_sq
-
-                    bg_fill = "#e2f0cb" if hovered else "#f8f9fa"
-                    self.board_canvas.create_rectangle(
-                        sx1 + 2,
-                        sy1 + 2,
-                        sx2 - 2,
-                        sy2 - 2,
-                        fill=bg_fill,
-                        outline="#d0d4dc",
-                        width=1,
-                        tags="promo_overlay",
-                    )
-                    disc_r = self.SQ_SIZE // 2 - 5
-                    disc_fill = "#ffffff" if hovered else "#e9ecef"
-                    disc_outline = "#81b64c" if hovered else "#ced4da"
-                    self.board_canvas.create_oval(
-                        cx - disc_r,
-                        cy - disc_r,
-                        cx + disc_r,
-                        cy + disc_r,
-                        fill=disc_fill,
-                        outline=disc_outline,
-                        width=2 if hovered else 1,
-                        tags="promo_overlay",
-                    )
-
-                    glyph = UNICODE_PIECES[(promo_color, pt)]
-                    if promo_color == chess.WHITE:
-                        for dx, dy in (
-                            (-2, 0),
-                            (2, 0),
-                            (0, -2),
-                            (0, 2),
-                            (-1, -1),
-                            (1, -1),
-                            (-1, 1),
-                            (1, 1),
-                        ):
-                            self.board_canvas.create_text(
-                                cx + dx,
-                                cy + dy,
-                                text=glyph,
-                                fill="#18191c",
-                                font=PIECE_FONT,
-                                tags="promo_overlay",
-                            )
-                        self.board_canvas.create_text(
-                            cx,
-                            cy,
-                            text=glyph,
-                            fill="#ffffff",
-                            font=PIECE_FONT,
-                            tags="promo_overlay",
-                        )
-                    else:
-                        for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
-                            self.board_canvas.create_text(
-                                cx + dx,
-                                cy + dy,
-                                text=glyph,
-                                fill="#ffffff",
-                                font=PIECE_FONT,
-                                tags="promo_overlay",
-                            )
-                        self.board_canvas.create_text(
-                            cx,
-                            cy,
-                            text=glyph,
-                            fill="#18191c",
-                            font=PIECE_FONT,
-                            tags="promo_overlay",
-                        )
-
-                    self.board_canvas.create_text(
-                        sx2 - 9,
-                        sy1 + 9,
-                        text=label[0],
-                        fill="#495057",
-                        font=PROMO_LABEL_FONT,
-                        tags="promo_overlay",
-                    )
 
     def _update_status_text(self, board: chess.Board | None = None) -> None:
         if self.controller.is_terminal():
@@ -1309,20 +735,7 @@ class ChessGUI:
     def _get_promotion_targets(
         self,
     ) -> list[tuple[chess.Square, int, int, chess.PieceType, str]]:
-        if self.pending_promotion is None:
-            return []
-        _, to_sq, _ = self.pending_promotion
-        col, start_row = self.square_to_grid(to_sq)
-        step = 1 if start_row < 4 else -1
-        items: list[tuple[chess.Square, int, int, chess.PieceType, str]] = []
-        for idx, (label, pt) in enumerate(PROMOTION_PIECES):
-            row = start_row + idx * step
-            if 0 <= row < 8:
-                f_idx = 7 - col if self.flipped else col
-                r_idx = row if self.flipped else 7 - row
-                opt_sq = chess.square(f_idx, r_idx)
-                items.append((opt_sq, col, row, pt, label))
-        return items
+        return get_promotion_targets(self.pending_promotion, self.flipped)
 
     def _on_canvas_motion(self, event: tk.Event) -> None:
         if self.pending_promotion is None:
@@ -1360,63 +773,87 @@ class ChessGUI:
             # Ignore human board clicks during AI's turn
             return False
 
-        # 0. If Chess.com-style in-board promotion overlay is open, resolve or cancel it
+        # In-board promotion piece choice click
         if self.pending_promotion is not None:
-            _, _, candidate_moves = self.pending_promotion
-            promo_map = {opt_sq: pt for opt_sq, _, _, pt, _ in self._get_promotion_targets()}
-            self.pending_promotion = None
-            self.hover_promo_sq = None
-            if square in promo_map:
-                chosen_pt = promo_map[square]
-                matching = [m for m in candidate_moves if m.promotion == chosen_pt]
-                chosen_move = matching[0] if matching else candidate_moves[0]
-                self._apply_move(chosen_move, actor_name="Human", elapsed=0.0, stats=None)
-                self._maybe_schedule_ai()
-                return True
+            from_sq, to_sq, promo_moves = self.pending_promotion
+            promo_targets = self._get_promotion_targets()
+            matched_pt: chess.PieceType | None = None
+            for opt_sq, _, _, pt, _ in promo_targets:
+                if square == opt_sq:
+                    matched_pt = pt
+                    break
+
+            if matched_pt is not None:
+                chosen_move = next(
+                    (m for m in promo_moves if m.promotion == matched_pt),
+                    None,
+                )
+                self.pending_promotion = None
+                self.hover_promo_sq = None
+                if chosen_move is not None:
+                    self._apply_move(chosen_move, actor_name="Human")
+                    self._maybe_schedule_ai()
+                    return True
+            else:
+                # Clicked outside promo column -> dismiss popup
+                self.pending_promotion = None
+                self.hover_promo_sq = None
+                self._refresh_ui()
+                return False
+
+        board = self.controller.board
+        clicked_piece = board.piece_at(square)
+
+        # 1. Clicked an existing selection -> deselect
+        if self.selected_square == square:
             self.selected_square = None
             self.legal_targets = {}
             self._refresh_ui()
             return False
 
-        board = self.controller.board
-
-        # 1. If square is a legal destination for the currently selected piece, make the move
-        if self.selected_square is not None and square in self.legal_targets:
+        # 2. Clicked a valid destination square
+        if square in self.legal_targets:
             candidate_moves = self.legal_targets[square]
-            chosen_move = candidate_moves[0]
-            if len(candidate_moves) > 1 or chosen_move.promotion is not None:
-                if promotion is not None or self.promotion_chooser is not None:
-                    promo_piece = (
-                        promotion
-                        if promotion is not None
-                        else self.promotion_chooser(self.controller.turn)
-                    )
-                    matching = [m for m in candidate_moves if m.promotion == promo_piece]
-                    chosen_move = matching[0] if matching else candidate_moves[0]
-                else:
-                    # Open Chess.com-style in-board promotion selector column
-                    self.pending_promotion = (self.selected_square, square, candidate_moves)
-                    self.hover_promo_sq = square
-                    self._refresh_ui()
-                    return False
+            self.selected_square = None
+            self.legal_targets = {}
 
-            self._apply_move(chosen_move, actor_name="Human", elapsed=0.0, stats=None)
+            # Promotion move handling
+            if any(m.promotion is not None for m in candidate_moves):
+                if promotion is not None:
+                    chosen = next((m for m in candidate_moves if m.promotion == promotion), candidate_moves[0])
+                    self._apply_move(chosen, actor_name="Human")
+                    self._maybe_schedule_ai()
+                    return True
+
+                if self.promotion_chooser is not None:
+                    chosen_pt = self.promotion_chooser(board.turn)
+                    chosen = next((m for m in candidate_moves if m.promotion == chosen_pt), candidate_moves[0])
+                    self._apply_move(chosen, actor_name="Human")
+                    self._maybe_schedule_ai()
+                    return True
+
+                # Open modern Chess.com-style vertical column dialog directly inside canvas
+                from_sq = candidate_moves[0].from_square
+                self.pending_promotion = (from_sq, square, candidate_moves)
+                self.hover_promo_sq = square
+                self._refresh_ui()
+                return False
+
+            self._apply_move(candidate_moves[0], actor_name="Human")
             self._maybe_schedule_ai()
             return True
 
-        # 2. If clicking own piece, select it and compute legal target squares
-        piece = board.piece_at(square)
-        if piece is not None and piece.color == self.controller.turn:
+        # 3. Clicked a piece of the active player's color -> select it
+        if clicked_piece is not None and clicked_piece.color == self.controller.turn:
             self.selected_square = square
-            targets: dict[chess.Square, list[chess.Move]] = {}
+            self.legal_targets = {}
             for move in self.controller.legal_moves:
                 if move.from_square == square:
-                    targets.setdefault(move.to_square, []).append(move)
-            self.legal_targets = targets
+                    self.legal_targets.setdefault(move.to_square, []).append(move)
             self._refresh_ui()
             return False
 
-        # 3. Otherwise clear selection
+        # 4. Clicked an empty/invalid square -> clear selection
         self.selected_square = None
         self.legal_targets = {}
         self._refresh_ui()
@@ -1427,14 +864,16 @@ class ChessGUI:
         move: chess.Move,
         *,
         actor_name: str,
-        elapsed: float,
-        stats: dict[str, int] | None,
+        elapsed: float | None = None,
+        stats: dict[str, int] | None = None,
     ) -> None:
-        board_before = self.controller.board
-        san = board_before.san(move)
-        ply = len(board_before.move_stack) + 1
-        move_no = (ply + 1) // 2
-        prefix = f"{move_no}." if board_before.turn == chess.WHITE else f"{move_no}..."
+        turn_num = (len(self.controller.board.move_stack) // 2) + 1
+        is_white = self.controller.turn == chess.WHITE
+        prefix = f"{turn_num}. " if is_white else f"{turn_num}... "
+
+        san = self.controller.board.san(move)
+        stats_part = f" ({format_search_stats(stats, elapsed)})" if elapsed is not None else ""
+        log_line = f"{prefix}{san:<7} [{actor_name}]{stats_part}"
 
         self.controller.push(move)
         self.last_move = move
@@ -1443,17 +882,13 @@ class ChessGUI:
         self.pending_promotion = None
         self.hover_promo_sq = None
 
-        if stats is not None:
-            stat_str = format_search_stats(stats, elapsed)
-            self.stats_var.set(f"{actor_name} ({san}): {stat_str}")
-            log_entry = f"{prefix:<5} {san:<7} ({move.uci()}) [{stat_str}]"
-        else:
-            self.stats_var.set(f"{actor_name} played {san} ({move.uci()})")
-            log_entry = f"{prefix:<5} {san:<7} ({move.uci()}) [Human]"
+        self.move_log.append(log_line)
+        self.history_list.insert(tk.END, log_line)
+        self.history_list.see(tk.END)
 
-        self.move_log.append(log_entry)
-        self.history_list.insert(tk.END, log_entry)
-        self.history_list.yview_moveto(1.0)
+        if stats is not None and elapsed is not None:
+            self.stats_var.set(f"Last Move ({actor_name}): {format_search_stats(stats, elapsed)}")
+
         self._refresh_ui()
 
     # ============================================================
