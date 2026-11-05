@@ -705,6 +705,7 @@ class ChessGUI:
     def _draw_board(self, board: chess.Board | None = None) -> None:
         if board is None:
             board = self.controller.board
+        game_result = self.controller.result() if self.controller.is_terminal() else None
         draw_board(
             self.board_canvas,
             board,
@@ -714,17 +715,22 @@ class ChessGUI:
             last_move=self.last_move,
             pending_promotion=self.pending_promotion,
             hover_promo_sq=self.hover_promo_sq,
+            game_result=game_result,
         )
 
     def _update_status_text(self, board: chess.Board | None = None) -> None:
         if self.controller.is_terminal():
             res = self.controller.result()
-            winner_str = (
-                "White wins"
-                if res.winner == chess.WHITE
-                else ("Black wins" if res.winner == chess.BLACK else "Draw")
-            )
-            self.status_var.set(f"Game Over: {res.result} — {winner_str} ({res.termination})")
+            term_str = (res.termination or "Finished").replace("_", " ").title()
+            if res.winner == chess.WHITE:
+                actor = self.player_names[chess.WHITE]
+                winner_str = f"👑 White ({actor}) Won"
+            elif res.winner == chess.BLACK:
+                actor = self.player_names[chess.BLACK]
+                winner_str = f"👑 Black ({actor}) Won"
+            else:
+                winner_str = "🤝 Game Drawn"
+            self.status_var.set(f"Game Over [{res.result}] — {winner_str} by {term_str}")
             return
 
         if board is None:

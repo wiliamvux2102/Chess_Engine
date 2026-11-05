@@ -6,6 +6,7 @@ import tkinter as tk
 
 import chess
 
+from chess_system.game_controller import GameResult
 from gui.theme import (
     BOARD_PX,
     CHECK_SQ,
@@ -75,6 +76,7 @@ def draw_board(
     last_move: chess.Move | None = None,
     pending_promotion: tuple[chess.Square, chess.Square, list[chess.Move]] | None = None,
     hover_promo_sq: chess.Square | None = None,
+    game_result: GameResult | None = None,
 ) -> None:
     """Render the full 8x8 board, piece glyphs, coordinates, and promotion dialog on canvas."""
     canvas.delete("all")
@@ -83,6 +85,19 @@ def draw_board(
     last_squares = (
         {last_move.from_square, last_move.to_square} if last_move is not None else set()
     )
+
+    is_ended = game_result is not None and game_result.result != "*"
+    win_king_sq = (
+        board.king(game_result.winner)
+        if (is_ended and game_result.winner is not None)
+        else None
+    )
+    lose_king_sq = (
+        board.king(not game_result.winner)
+        if (is_ended and game_result.winner is not None)
+        else None
+    )
+    is_draw = is_ended and game_result.winner is None
 
     # 1. Draw Squares & Highlights
     for square in chess.SQUARES:
@@ -100,6 +115,12 @@ def draw_board(
             fill = SELECTED_SQ
         if square == king_in_check_sq:
             fill = CHECK_SQ
+        if square == win_king_sq:
+            fill = "#69923e" if is_light else "#517430"
+        elif square == lose_king_sq:
+            fill = "#ef4444" if is_light else "#b91c1c"
+        elif is_draw and (square == board.king(chess.WHITE) or square == board.king(chess.BLACK)):
+            fill = "#71717a" if is_light else "#52525b"
 
         canvas.create_rectangle(
             x1, y1, x2, y2, fill=fill, outline="", tags=f"sq_{square}"
@@ -215,7 +236,103 @@ def draw_board(
             font=COORD_FONT,
         )
 
-    # 4. Chess.com-style in-board promotion column overlay
+    # 4. Chess.com-style Victory / Defeat Badges on Kings and Announcement
+    if is_ended and game_result is not None:
+        if game_result.winner is not None:
+            # Winner King badge: Gold crown
+            if win_king_sq is not None:
+                w_col, w_row = square_to_grid(win_king_sq, flipped)
+                bx = MARGIN + (w_col + 1) * SQ_SIZE - 15
+                by = MARGIN + w_row * SQ_SIZE + 15
+                canvas.create_oval(
+                    bx - 12, by - 12, bx + 14, by + 14,
+                    fill="#0a0a0c", outline="", tags="endgame_badge"
+                )
+                canvas.create_oval(
+                    bx - 13, by - 13, bx + 13, by + 13,
+                    fill="#1c1917", outline="#eab308", width=2, tags="endgame_badge"
+                )
+                canvas.create_text(
+                    bx, by, text="👑", font=("Segoe UI Emoji", 11), tags="endgame_badge"
+                )
+
+            # Loser King badge: Defeat cross
+            if lose_king_sq is not None:
+                l_col, l_row = square_to_grid(lose_king_sq, flipped)
+                bx = MARGIN + (l_col + 1) * SQ_SIZE - 15
+                by = MARGIN + l_row * SQ_SIZE + 15
+                canvas.create_oval(
+                    bx - 12, by - 12, bx + 14, by + 14,
+                    fill="#0a0a0c", outline="", tags="endgame_badge"
+                )
+                canvas.create_oval(
+                    bx - 13, by - 13, bx + 13, by + 13,
+                    fill="#450a0a", outline="#ef4444", width=2, tags="endgame_badge"
+                )
+                canvas.create_text(
+                    bx, by - 1, text="✕", fill="#fca5a5", font=("Segoe UI", 12, "bold"), tags="endgame_badge"
+                )
+        elif is_draw:
+            for k_color in (chess.WHITE, chess.BLACK):
+                k_sq = board.king(k_color)
+                if k_sq is not None:
+                    k_col, k_row = square_to_grid(k_sq, flipped)
+                    bx = MARGIN + (k_col + 1) * SQ_SIZE - 15
+                    by = MARGIN + k_row * SQ_SIZE + 15
+                    canvas.create_oval(
+                        bx - 12, by - 12, bx + 14, by + 14,
+                        fill="#0a0a0c", outline="", tags="endgame_badge"
+                    )
+                    canvas.create_oval(
+                        bx - 13, by - 13, bx + 13, by + 13,
+                        fill="#18181b", outline="#a1a1aa", width=2, tags="endgame_badge"
+                    )
+                    canvas.create_text(
+                        bx, by, text="½", fill="#e4e4e7", font=("Segoe UI", 10, "bold"), tags="endgame_badge"
+                    )
+
+        # Floating Endgame Announcement Card
+        card_w = 340
+        card_h = 44
+        card_cx = BOARD_PX // 2
+        card_x1 = card_cx - card_w // 2
+        card_y1 = MARGIN + 10
+        card_x2 = card_cx + card_w // 2
+        card_y2 = card_y1 + card_h
+
+        card_border = "#eab308" if game_result.winner is not None else "#a1a1aa"
+        canvas.create_rectangle(
+            card_x1 + 3, card_y1 + 3, card_x2 + 3, card_y2 + 3,
+            fill="#0a0a0c", outline="", tags="endgame_banner"
+        )
+        canvas.create_rectangle(
+            card_x1, card_y1, card_x2, card_y2,
+            fill="#18181b", outline=card_border, width=2, tags="endgame_banner"
+        )
+
+        term_reason = (game_result.termination or "GAME OVER").replace("_", " ").title()
+        if game_result.winner == chess.WHITE:
+            lead_text = f"👑 White Won — {term_reason}"
+            score_color = "#facc15"
+        elif game_result.winner == chess.BLACK:
+            lead_text = f"👑 Black Won — {term_reason}"
+            score_color = "#facc15"
+        else:
+            lead_text = f"🤝 Draw — {term_reason}"
+            score_color = "#e4e4e7"
+
+        canvas.create_text(
+            card_x1 + 16, (card_y1 + card_y2) // 2,
+            text=lead_text, fill="#ffffff", font=("Segoe UI", 10, "bold"),
+            anchor="w", tags="endgame_banner"
+        )
+        canvas.create_text(
+            card_x2 - 16, (card_y1 + card_y2) // 2,
+            text=game_result.result, fill=score_color, font=("Consolas", 12, "bold"),
+            anchor="e", tags="endgame_banner"
+        )
+
+    # 5. Chess.com-style in-board promotion column overlay
     if pending_promotion is not None:
         promo_targets = get_promotion_targets(pending_promotion, flipped)
         if promo_targets:

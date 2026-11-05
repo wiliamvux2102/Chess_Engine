@@ -384,6 +384,51 @@ class GUIIntegrationTests(unittest.TestCase):
         self.assertEqual(len(mcts_errors), 1)
         self.assertIsInstance(mcts_errors[0], InterruptedError)
 
+    def test_endgame_indicators_and_badges(self):
+        """Verify that checkmate and stalemate display victory/defeat king badges and banner."""
+        # 1. Checkmate position (Scholar's mate: White checkmates Black)
+        mate_fen = "r1bqkb1r/pppp1Qpp/2n5/4p3/2B1n3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 1"
+        gui = self.gui = ChessGUI(
+            self.root,
+            fen=mate_fen,
+            white_kind="human",
+            black_kind="human",
+            auto_start=False,
+            error_handler=lambda t, m: self.errors.append((t, m)),
+        )
+        self.assertTrue(gui.controller.is_terminal())
+        self.assertEqual(gui.controller.result().result, "1-0")
+        self.assertEqual(gui.controller.result().winner, chess.WHITE)
+        self.assertIn("White", gui.status_var.get())
+        self.assertIn("Checkmate", gui.status_var.get())
+
+        # Badges and announcement card must be rendered on the canvas
+        badges = gui.board_canvas.find_withtag("endgame_badge")
+        self.assertGreater(len(badges), 0)
+        banners = gui.board_canvas.find_withtag("endgame_banner")
+        self.assertGreater(len(banners), 0)
+
+        # 2. Stalemate position
+        draw_fen = "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"
+        gui2 = ChessGUI(
+            self.root,
+            fen=draw_fen,
+            white_kind="human",
+            black_kind="human",
+            auto_start=False,
+            error_handler=lambda t, m: self.errors.append((t, m)),
+        )
+        try:
+            self.assertTrue(gui2.controller.is_terminal())
+            self.assertEqual(gui2.controller.result().result, "1/2-1/2")
+            self.assertIn("Draw", gui2.status_var.get())
+            badges2 = gui2.board_canvas.find_withtag("endgame_badge")
+            self.assertGreater(len(badges2), 0)
+            banners2 = gui2.board_canvas.find_withtag("endgame_banner")
+            self.assertGreater(len(banners2), 0)
+        finally:
+            gui2.close()
+
     def test_invalid_config_handled_gracefully(self):
         gui = self.gui = ChessGUI(
             self.root,
