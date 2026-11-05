@@ -247,6 +247,7 @@ class ChessGUI:
         self.flipped: bool = False
         self.paused: bool = False
         self.ai_thinking: bool = False
+        self.ai_worker_thread: threading.Thread | None = None
         self.search_token: int = 0
         self.after_id: str | None = None
         self.poll_after_id: str | None = None
@@ -286,6 +287,8 @@ class ChessGUI:
         self.toggle_eval_bar(show_eval_bar)
         self.new_game(auto_start=auto_start)
         self.poll_after_id = self.root.after(25, self._poll_ai_queue)
+        if self.owns_root:
+            self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def _setup_theme(self) -> None:
         style = ttk.Style(self.root)
@@ -756,13 +759,28 @@ class ChessGUI:
 
     def _cancel_pending_ai(self) -> None:
         self.search_token += 1
-        self.ai_thinking = False
         if self.after_id is not None:
             try:
                 self.root.after_cancel(self.after_id)
             except tk.TclError:
                 pass
             self.after_id = None
+
+        # Abort any in-progress search on active AI agents
+        for agent in self.agents.values():
+            if agent is not None and hasattr(agent, "abort_search"):
+                try:
+                    agent.abort_search()
+                except Exception:
+                    pass
+
+        # Wait for the background worker thread to stop to prevent concurrent execution
+        if self.ai_worker_thread is not None and self.ai_worker_thread.is_alive():
+            self.ai_worker_thread.join(timeout=0.3)
+            if not self.ai_worker_thread.is_alive():
+                self.ai_worker_thread = None
+
+        self.ai_thinking = (self.ai_worker_thread is not None and self.ai_worker_thread.is_alive())
 
     def new_game(self, *, fen: str | None = None, auto_start: bool = True) -> bool:
         """Validate configuration, reset board, and start a fresh game."""
@@ -850,7 +868,12 @@ class ChessGUI:
 
     def step_ai_move(self) -> bool:
         """Let the current AI compute and play exactly 1 move on the board, then pause."""
-        if self.controller.is_terminal() or self.current_agent() is None or self.ai_thinking:
+        if (
+            self.controller.is_terminal()
+            or self.current_agent() is None
+            or self.ai_thinking
+            or (self.ai_worker_thread is not None and self.ai_worker_thread.is_alive())
+        ):
             return False
         self.paused = True
         self.pause_btn_text.set("Resume")
@@ -1327,7 +1350,11 @@ class ChessGUI:
         promotion: chess.PieceType | None = None,
     ) -> bool:
         """Handle clicking a board square during a human turn. Return True if a move was made."""
-        if self.controller.is_terminal() or self.ai_thinking:
+        if (
+            self.controller.is_terminal()
+            or self.ai_thinking
+            or (self.ai_worker_thread is not None and self.ai_worker_thread.is_alive())
+        ):
             return False
         if self.current_agent() is not None:
             # Ignore human board clicks during AI's turn
@@ -1434,16 +1461,22 @@ class ChessGUI:
     # ============================================================
 
     def _maybe_schedule_ai(self) -> None:
-        if self.paused or self.controller.is_terminal() or self.ai_thinking:
+        if self.paused or self.controller.is_terminal():
             return
         if self.current_agent() is None:
+            return
+        if self.ai_thinking or (self.ai_worker_thread is not None and self.ai_worker_thread.is_alive()):
+            if self.after_id is None:
+                self.after_id = self.root.after(40, self._maybe_schedule_ai)
             return
         delay = self._parse_delay_ms() if self.last_move is not None else 20
         self.after_id = self.root.after(max(1, delay), self._start_ai_turn)
 
     def _start_ai_turn(self) -> None:
         self.after_id = None
-        if self.controller.is_terminal() or self.ai_thinking:
+        if self.controller.is_terminal():
+            return
+        if self.ai_thinking or (self.ai_worker_thread is not None and self.ai_worker_thread.is_alive()):
             return
         agent = self.current_agent()
         if agent is None:
@@ -1467,7 +1500,8 @@ class ChessGUI:
                 elapsed = perf_counter() - start
                 self.ai_queue.put((token, None, elapsed, {}, exc))
 
-        threading.Thread(target=worker, daemon=True).start()
+        self.ai_worker_thread = threading.Thread(target=worker, daemon=True)
+        self.ai_worker_thread.start()
 
     def _poll_ai_queue(self) -> None:
         self.poll_after_id = None
@@ -1489,10 +1523,16 @@ class ChessGUI:
 
             if token != self.search_token:
                 # Discard stale result from a cancelled/reset search
+                if self.ai_worker_thread is not None and not self.ai_worker_thread.is_alive():
+                    self.ai_worker_thread = None
+                    self.ai_thinking = False
                 continue
 
             self.ai_thinking = False
+            self.ai_worker_thread = None
             if error is not None or move is None:
+                if isinstance(error, InterruptedError):
+                    continue
                 self.paused = True
                 self.pause_btn_text.set("Resume")
                 self._report_error("AI Error", str(error or "AI returned no move"))

@@ -81,11 +81,16 @@ class AlphaBetaAI:
         self.eval_mode = eval_mode
         self.claim_draw = claim_draw
         self._evaluator = create_ab_evaluator(self.eval_mode, claim_draw=self.claim_draw)
+        self._stop_requested = False
         self.last_search_stats = {
             "depth": 0,
             "nodes": 0,
             "cutoffs": 0,
         }
+
+    def abort_search(self) -> None:
+        """Signal the active search to abort immediately."""
+        self._stop_requested = True
 
     def choose_move(self, board: chess.Board) -> chess.Move:
         """Choose the best legal move without modifying the board."""
@@ -93,6 +98,7 @@ class AlphaBetaAI:
         if board.is_game_over(claim_draw=self.claim_draw):
             raise ValueError("Cannot choose a move in a terminal position")
 
+        self._stop_requested = False
         self.last_search_stats = {
             "depth": 0,
             "nodes": 0,
@@ -111,6 +117,9 @@ class AlphaBetaAI:
         beta = float("inf")
 
         for move in legal_moves:
+            if self._stop_requested:
+                raise InterruptedError("Search cancelled")
+
             board.push(move)
 
             try:
@@ -123,6 +132,9 @@ class AlphaBetaAI:
                 )
             finally:
                 board.pop()
+
+            if self._stop_requested:
+                raise InterruptedError("Search cancelled")
 
             if maximizing:
                 if score > best_score:
@@ -151,6 +163,8 @@ class AlphaBetaAI:
         beta: float,
     ) -> float:
         """Return a minimax score or an alpha-beta bound."""
+        if self._stop_requested:
+            return 0.0
 
         self.last_search_stats["nodes"] += 1
 
@@ -169,6 +183,8 @@ class AlphaBetaAI:
             best_score = float("-inf")
 
             for move in order_moves(board):
+                if self._stop_requested:
+                    break
                 board.push(move)
 
                 try:
@@ -197,6 +213,8 @@ class AlphaBetaAI:
             best_score = float("inf")
 
             for move in order_moves(board):
+                if self._stop_requested:
+                    break
                 board.push(move)
 
                 try:

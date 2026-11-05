@@ -55,11 +55,16 @@ class MCTS:
         self.seed = seed
         self.claim_draw = claim_draw
         self._rng = random.Random(seed)
+        self._stop_requested = False
         self.last_search_stats: dict[str, int] = {"iterations": 0, "rollouts": 0}
 
         # Create evaluators based on mode
         self._evaluator = create_evaluator(self.eval_mode, claim_draw)
         self._cutoff_evaluator = create_cutoff_evaluator(self.eval_mode, claim_draw)
+
+    def abort_search(self) -> None:
+        """Signal the active search to abort immediately."""
+        self._stop_requested = True
 
     def choose_move(self, board: chess.Board) -> chess.Move:
         """Choose a legal move without changing the input board or its history.
@@ -68,6 +73,7 @@ class MCTS:
         Prefer an immediate win; otherwise choose most visits, then highest mean.
         Reject invalid or terminal positions with ValueError.
         """
+        self._stop_requested = False
         self.last_search_stats = {"iterations": 0, "rollouts": 0}
         if not board.is_valid():
             raise ValueError("Invalid chess position")
@@ -75,7 +81,11 @@ class MCTS:
         if root.is_terminal():
             raise ValueError("Cannot choose a move in a terminal position")
         winning_moves = self._prepare_root(root)
+        if self._stop_requested:
+            raise InterruptedError("Search cancelled")
         for _ in range(self.iterations):
+            if self._stop_requested:
+                raise InterruptedError("Search cancelled")
             node = root
             # Selection: descend through fully expanded nodes using UCT.
             while not node.untried_moves and node.children:
@@ -104,6 +114,8 @@ class MCTS:
         priorities = {move: 0.0 for move in root.untried_moves}
         safe, losing, winning = [], [], []
         for move in list(root.untried_moves):
+            if self._stop_requested:
+                break
             gain = exchange_gain(board, move)
             board.push(move)
             try:
@@ -154,6 +166,8 @@ class MCTS:
         """
         rollout = board.copy(stack=True)
         for _ in range(self.rollout_max_plies):
+            if self._stop_requested:
+                break
             outcome = rollout.outcome(claim_draw=self.claim_draw)
             if outcome is not None:
                 return 0.0 if outcome.winner is None else (1.0 if outcome.winner == chess.WHITE else -1.0)

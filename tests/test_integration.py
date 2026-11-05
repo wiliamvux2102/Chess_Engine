@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+import threading
 import time
 import tkinter as tk
 import unittest
@@ -14,6 +15,7 @@ from pathlib import Path
 import chess
 
 from algorithms.alpha_beta import AlphaBetaAI
+from algorithms.eval_registry import EvalMode
 from algorithms.mcts import MCTS
 from chess_system.ai_interface import ChessAI
 from experiments.benchmark import run_match
@@ -34,7 +36,6 @@ class ProtocolAndEvalBarTests(unittest.TestCase):
         ab = build_agent("alpha-beta", depth="2", eval_mode="mcts_pe")
         self.assertIsInstance(ab, AlphaBetaAI)
         self.assertEqual(ab.depth, 2)
-        from algorithms.eval_registry import EvalMode
         self.assertEqual(ab.eval_mode, EvalMode.MCTS_PE)
 
         mcts = build_agent("mcts", iterations="20", seed=1, eval_mode="ab_classic")
@@ -299,6 +300,89 @@ class GUIIntegrationTests(unittest.TestCase):
         self.assertTrue(self._wait_for_ai_move(gui))
         self.assertGreaterEqual(len(gui.controller.board.move_stack), 4)
         gui.toggle_pause()
+
+    def test_pause_aborts_active_worker_and_resume_prevents_concurrency(self):
+        """Verify that pausing while an AI search is active aborts the worker thread,
+        and unpausing does not create concurrent conflicting searches."""
+        gui = self.gui = ChessGUI(
+            self.root,
+            white_kind="human",
+            black_kind="mcts",
+            black_iterations=250,
+            move_delay_ms=5,
+            error_handler=lambda t, m: self.errors.append((t, m)),
+        )
+        # Human plays e2e4 -> triggers Black MCTS (search is active)
+        gui.select_square(chess.E2)
+        self.assertTrue(gui.select_square(chess.E4))
+        self.assertEqual(gui.controller.turn, chess.BLACK)
+
+        # Wait until AI worker thread is active
+        deadline = time.perf_counter() + 2.0
+        while time.perf_counter() < deadline:
+            self.root.update()
+            if gui.ai_worker_thread is not None and gui.ai_worker_thread.is_alive():
+                break
+            time.sleep(0.01)
+
+        self.assertTrue(gui.ai_thinking)
+        self.assertIsNotNone(gui.ai_worker_thread)
+        self.assertTrue(gui.ai_worker_thread.is_alive())
+
+        # Pause while search is in progress
+        gui.toggle_pause()
+        self.assertTrue(gui.paused)
+
+        # The worker thread must have been cleanly aborted and joined
+        self.assertTrue(gui.ai_worker_thread is None or not gui.ai_worker_thread.is_alive())
+        self.assertFalse(gui.ai_thinking)
+        self.assertEqual(len(gui.controller.board.move_stack), 1)
+
+        # Resume: search restarts cleanly from scratch with a single worker thread
+        gui.toggle_pause()
+        self.assertFalse(gui.paused)
+        self.assertTrue(self._wait_for_ai_move(gui, timeout=6.0))
+        self.assertEqual(len(gui.controller.board.move_stack), 2)
+        self.assertEqual(gui.controller.turn, chess.WHITE)
+        self.assertEqual(len(self.errors), 0)
+
+    def test_ai_abort_search_protocol(self):
+        """Verify that abort_search stops AlphaBetaAI and MCTS immediately."""
+        ab = AlphaBetaAI(depth=6)
+        errors = []
+
+        def run_ab():
+            try:
+                ab.choose_move(chess.Board())
+            except Exception as exc:
+                errors.append(exc)
+
+        t = threading.Thread(target=run_ab)
+        t.start()
+        time.sleep(0.02)
+        ab.abort_search()
+        t.join(timeout=1.0)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], InterruptedError)
+
+        mcts_agent = MCTS(iterations=50000, rollout_max_plies=40)
+        mcts_errors = []
+
+        def run_mcts():
+            try:
+                mcts_agent.choose_move(chess.Board())
+            except Exception as exc:
+                mcts_errors.append(exc)
+
+        t_mcts = threading.Thread(target=run_mcts)
+        t_mcts.start()
+        time.sleep(0.02)
+        mcts_agent.abort_search()
+        t_mcts.join(timeout=1.0)
+        self.assertFalse(t_mcts.is_alive())
+        self.assertEqual(len(mcts_errors), 1)
+        self.assertIsInstance(mcts_errors[0], InterruptedError)
 
     def test_invalid_config_handled_gracefully(self):
         gui = self.gui = ChessGUI(
