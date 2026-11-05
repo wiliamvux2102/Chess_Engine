@@ -8,6 +8,7 @@ from typing import Sequence
 
 import chess
 
+from chess_system.ai_interface import ChessAI
 from experiments.benchmark import run_match, save_match
 from experiments.tournament import run_tournament, summarize
 from gui.app import build_agent, launch_gui
@@ -200,19 +201,31 @@ def _run_cli_tournament(args: argparse.Namespace) -> int:
         "seed": args.seed,
         "eval_mode": args.eval_mode,
     }
+    game_counter = 0
+
+    def make_mcts(game_idx: int | None = None) -> ChessAI:
+        nonlocal game_counter
+        game_counter += 1
+        idx = game_idx if game_idx is not None else game_counter
+        # If a base seed is provided, increment deterministically per game so rounds do not repeat
+        game_seed = (args.seed + idx - 1) if args.seed is not None else None
+        agent = build_agent(
+            "mcts",
+            iterations=args.iterations,
+            time_limit=args.time_limit,
+            seed=game_seed,
+            eval_mode=args.eval_mode,
+        )
+        assert agent is not None
+        return agent
+
     matches = run_tournament(
-        factory_a=lambda: build_agent(  # type: ignore[return-value]
+        factory_a=lambda *args_call: build_agent(  # type: ignore[return-value]
             "alpha_beta",
             depth=args.depth,
             eval_mode=args.ab_eval_mode,
         ),
-        factory_b=lambda: build_agent(  # type: ignore[return-value]
-            "mcts",
-            iterations=args.iterations,
-            time_limit=args.time_limit,
-            seed=args.seed,
-            eval_mode=args.eval_mode,
-        ),
+        factory_b=make_mcts,
         name_a="Alpha-Beta",
         name_b="MCTS",
         rounds=args.rounds,

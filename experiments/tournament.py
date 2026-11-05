@@ -63,10 +63,19 @@ def run_tournament(
     if output is not None:
         output.mkdir(parents=True, exist_ok=False)
     matches = []
+    game_idx = 0
     for opening_index, fen in enumerate(positions, 1):
         for repetition in range(1, rounds + 1):
             for swapped in (False, True):
-                a, b = factory_a(), factory_b()
+                game_idx += 1
+                try:
+                    a = factory_a(game_idx)  # type: ignore[call-arg]
+                except TypeError:
+                    a = factory_a()
+                try:
+                    b = factory_b(game_idx)  # type: ignore[call-arg]
+                except TypeError:
+                    b = factory_b()
                 match = run_match(
                     b if swapped else a, a if swapped else b,
                     white_name=name_b if swapped else name_a,
