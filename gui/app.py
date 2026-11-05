@@ -724,12 +724,12 @@ class ChessGUI:
             term_str = (res.termination or "Finished").replace("_", " ").title()
             if res.winner == chess.WHITE:
                 actor = self.player_names[chess.WHITE]
-                winner_str = f"👑 White ({actor}) Won"
+                winner_str = f"White ({actor}) Won"
             elif res.winner == chess.BLACK:
                 actor = self.player_names[chess.BLACK]
-                winner_str = f"👑 Black ({actor}) Won"
+                winner_str = f"Black ({actor}) Won"
             else:
-                winner_str = "🤝 Game Drawn"
+                winner_str = "Game Drawn"
             self.status_var.set(f"Game Over [{res.result}] — {winner_str} by {term_str}")
             return
 

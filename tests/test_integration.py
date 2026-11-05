@@ -385,7 +385,7 @@ class GUIIntegrationTests(unittest.TestCase):
         self.assertIsInstance(mcts_errors[0], InterruptedError)
 
     def test_endgame_indicators_and_badges(self):
-        """Verify that checkmate and stalemate display victory/defeat king badges and banner."""
+        """Verify that checkmate and stalemate display victory/defeat king badges with unobstructed board."""
         # 1. Checkmate position (Scholar's mate: White checkmates Black)
         mate_fen = "r1bqkb1r/pppp1Qpp/2n5/4p3/2B1n3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 1"
         gui = self.gui = ChessGUI(
@@ -402,11 +402,9 @@ class GUIIntegrationTests(unittest.TestCase):
         self.assertIn("White", gui.status_var.get())
         self.assertIn("Checkmate", gui.status_var.get())
 
-        # Badges and announcement card must be rendered on the canvas
+        # Badges must be rendered on the kings and board remains unobstructed
         badges = gui.board_canvas.find_withtag("endgame_badge")
         self.assertGreater(len(badges), 0)
-        banners = gui.board_canvas.find_withtag("endgame_banner")
-        self.assertGreater(len(banners), 0)
 
         # 2. Stalemate position
         draw_fen = "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"
@@ -424,8 +422,6 @@ class GUIIntegrationTests(unittest.TestCase):
             self.assertIn("Draw", gui2.status_var.get())
             badges2 = gui2.board_canvas.find_withtag("endgame_badge")
             self.assertGreater(len(badges2), 0)
-            banners2 = gui2.board_canvas.find_withtag("endgame_banner")
-            self.assertGreater(len(banners2), 0)
         finally:
             gui2.close()
 

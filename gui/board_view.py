@@ -236,41 +236,64 @@ def draw_board(
             font=COORD_FONT,
         )
 
-    # 4. Chess.com-style Victory / Defeat Badges on Kings and Announcement
+    # 4. Chess.com-style Victory / Defeat Badges on Kings
     if is_ended and game_result is not None:
         if game_result.winner is not None:
-            # Winner King badge: Gold crown
+            # Winner King badge: Bright Gold circle + crisp white vector crown
             if win_king_sq is not None:
                 w_col, w_row = square_to_grid(win_king_sq, flipped)
                 bx = MARGIN + (w_col + 1) * SQ_SIZE - 15
                 by = MARGIN + w_row * SQ_SIZE + 15
+                # Drop shadow
                 canvas.create_oval(
-                    bx - 12, by - 12, bx + 14, by + 14,
-                    fill="#0a0a0c", outline="", tags="endgame_badge"
+                    bx - 12, by - 12 + 1, bx + 12, by + 12 + 1,
+                    fill="#000000", outline="", tags="endgame_badge"
                 )
+                # Gold circle badge with crisp white border
                 canvas.create_oval(
-                    bx - 13, by - 13, bx + 13, by + 13,
-                    fill="#1c1917", outline="#eab308", width=2, tags="endgame_badge"
+                    bx - 12, by - 12, bx + 12, by + 12,
+                    fill="#f59e0b", outline="#ffffff", width=2, tags="endgame_badge"
                 )
-                canvas.create_text(
-                    bx, by, text="👑", font=("Segoe UI Emoji", 11), tags="endgame_badge"
+                # Vector crown polygon
+                crown_pts = [
+                    bx - 6, by - 3,
+                    bx - 3, by,
+                    bx, by - 5,
+                    bx + 3, by,
+                    bx + 6, by - 3,
+                    bx + 5, by + 4,
+                    bx - 5, by + 4,
+                ]
+                canvas.create_polygon(
+                    crown_pts, fill="#ffffff", outline="#78350f", width=1, tags="endgame_badge"
+                )
+                canvas.create_line(
+                    bx - 4, by + 2, bx + 4, by + 2, fill="#78350f", width=1, tags="endgame_badge"
                 )
 
-            # Loser King badge: Defeat cross
+            # Loser King badge: Bright Crimson circle + crisp white cross
             if lose_king_sq is not None:
                 l_col, l_row = square_to_grid(lose_king_sq, flipped)
                 bx = MARGIN + (l_col + 1) * SQ_SIZE - 15
                 by = MARGIN + l_row * SQ_SIZE + 15
+                # Drop shadow
                 canvas.create_oval(
-                    bx - 12, by - 12, bx + 14, by + 14,
-                    fill="#0a0a0c", outline="", tags="endgame_badge"
+                    bx - 12, by - 12 + 1, bx + 12, by + 12 + 1,
+                    fill="#000000", outline="", tags="endgame_badge"
                 )
+                # Crimson circle badge with crisp white border
                 canvas.create_oval(
-                    bx - 13, by - 13, bx + 13, by + 13,
-                    fill="#450a0a", outline="#ef4444", width=2, tags="endgame_badge"
+                    bx - 12, by - 12, bx + 12, by + 12,
+                    fill="#dc2626", outline="#ffffff", width=2, tags="endgame_badge"
                 )
-                canvas.create_text(
-                    bx, by - 1, text="✕", fill="#fca5a5", font=("Segoe UI", 12, "bold"), tags="endgame_badge"
+                # Crisp white defeat cross
+                canvas.create_line(
+                    bx - 4, by - 4, bx + 4, by + 4,
+                    fill="#ffffff", width=2, capstyle="round", tags="endgame_badge"
+                )
+                canvas.create_line(
+                    bx - 4, by + 4, bx + 4, by - 4,
+                    fill="#ffffff", width=2, capstyle="round", tags="endgame_badge"
                 )
         elif is_draw:
             for k_color in (chess.WHITE, chess.BLACK):
@@ -280,57 +303,16 @@ def draw_board(
                     bx = MARGIN + (k_col + 1) * SQ_SIZE - 15
                     by = MARGIN + k_row * SQ_SIZE + 15
                     canvas.create_oval(
-                        bx - 12, by - 12, bx + 14, by + 14,
-                        fill="#0a0a0c", outline="", tags="endgame_badge"
+                        bx - 12, by - 12 + 1, bx + 12, by + 12 + 1,
+                        fill="#000000", outline="", tags="endgame_badge"
                     )
                     canvas.create_oval(
-                        bx - 13, by - 13, bx + 13, by + 13,
-                        fill="#18181b", outline="#a1a1aa", width=2, tags="endgame_badge"
+                        bx - 12, by - 12, bx + 12, by + 12,
+                        fill="#475569", outline="#ffffff", width=2, tags="endgame_badge"
                     )
                     canvas.create_text(
-                        bx, by, text="½", fill="#e4e4e7", font=("Segoe UI", 10, "bold"), tags="endgame_badge"
+                        bx, by, text="½", fill="#ffffff", font=("Segoe UI", 9, "bold"), tags="endgame_badge"
                     )
-
-        # Floating Endgame Announcement Card
-        card_w = 340
-        card_h = 44
-        card_cx = BOARD_PX // 2
-        card_x1 = card_cx - card_w // 2
-        card_y1 = MARGIN + 10
-        card_x2 = card_cx + card_w // 2
-        card_y2 = card_y1 + card_h
-
-        card_border = "#eab308" if game_result.winner is not None else "#a1a1aa"
-        canvas.create_rectangle(
-            card_x1 + 3, card_y1 + 3, card_x2 + 3, card_y2 + 3,
-            fill="#0a0a0c", outline="", tags="endgame_banner"
-        )
-        canvas.create_rectangle(
-            card_x1, card_y1, card_x2, card_y2,
-            fill="#18181b", outline=card_border, width=2, tags="endgame_banner"
-        )
-
-        term_reason = (game_result.termination or "GAME OVER").replace("_", " ").title()
-        if game_result.winner == chess.WHITE:
-            lead_text = f"👑 White Won — {term_reason}"
-            score_color = "#facc15"
-        elif game_result.winner == chess.BLACK:
-            lead_text = f"👑 Black Won — {term_reason}"
-            score_color = "#facc15"
-        else:
-            lead_text = f"🤝 Draw — {term_reason}"
-            score_color = "#e4e4e7"
-
-        canvas.create_text(
-            card_x1 + 16, (card_y1 + card_y2) // 2,
-            text=lead_text, fill="#ffffff", font=("Segoe UI", 10, "bold"),
-            anchor="w", tags="endgame_banner"
-        )
-        canvas.create_text(
-            card_x2 - 16, (card_y1 + card_y2) // 2,
-            text=game_result.result, fill=score_color, font=("Consolas", 12, "bold"),
-            anchor="e", tags="endgame_banner"
-        )
 
     # 5. Chess.com-style in-board promotion column overlay
     if pending_promotion is not None:
