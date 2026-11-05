@@ -90,8 +90,6 @@ class ChessGUI:
         self.root = tk.Tk() if self.owns_root else root
         if self.owns_root:
             self.root.title("Chess Engine — 8x8 GUI (Human vs AI & Live AI vs AI)")
-            self.root.geometry("1060x680")
-            self.root.minsize(980, 640)
 
         self.controller = GameController(fen, claim_draw=True)
         self.promotion_chooser = promotion_chooser
@@ -157,6 +155,17 @@ class ChessGUI:
         self.poll_after_id = self.root.after(25, self._poll_ai_queue)
         if self.owns_root:
             self.root.protocol("WM_DELETE_WINDOW", self.close)
+            self.root.update_idletasks()
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            req_w = max(1240, self.root.winfo_reqwidth())
+            req_h = max(730, self.root.winfo_reqheight())
+            win_w = min(req_w, screen_w - 40)
+            win_h = min(req_h, screen_h - 60)
+            x = max(0, (screen_w - win_w) // 2)
+            y = max(0, (screen_h - win_h) // 2 - 20)
+            self.root.geometry(f"{win_w}x{win_h}+{x}+{y}")
+            self.root.minsize(min(1100, win_w), min(680, win_h))
 
     def _setup_theme(self) -> None:
         setup_theme(self.root)
@@ -166,6 +175,8 @@ class ChessGUI:
         main_frame.grid(row=0, column=0, sticky="nsew")
         self.root.rowconfigure(0, weight=1)
         self.root.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
 
         # Left Area: Eval Bar (Col 0) + 8x8 Board Canvas (Col 1)
         self.board_container = ttk.Frame(main_frame)
