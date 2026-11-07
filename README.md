@@ -101,7 +101,9 @@ Chess_Engine/
 │   ├── test_alpha_beta.py               # Kiểm thử Alpha-Beta và hàm đánh giá tĩnh
 │   ├── test_mcts.py                     # Kiểm thử MCTS, UCT node, rollout và giải thế cờ
 │   └── test_integration.py              # Kiểm thử tích hợp GUI, AI, Eval Bar, hủy luồng & CLI
-└── docs/                                # Tài liệu tham khảo dự án
+└── docs/                                # Tài liệu kỹ thuật và kết quả thực nghiệm
+    ├── ARCHITECTURE_AND_ALGORITHMS.md   # Thiết kế kiến trúc, thuật toán và cơ chế đánh giá
+    └── EXPERIMENTAL_RESULTS.md          # Phương pháp luận và kết quả đối đầu 180 ván (Evaluation Parity)
 ```
 
 ---
