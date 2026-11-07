@@ -13,7 +13,6 @@ import chess
 
 from algorithms.evaluation import evaluate as ab_evaluate, MATE_SCORE as AB_MATE_SCORE
 from algorithms.mcts_rollout import position_score as mcts_position_score, cutoff_value as mcts_cutoff_value
-from algorithms.mcts_rollout import CENTIPAWN_SCALE
 
 
 class EvalMode(Enum):

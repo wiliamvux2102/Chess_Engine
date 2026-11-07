@@ -8,7 +8,7 @@ White maximizes and Black minimizes.
 import chess
 
 from algorithms.eval_registry import EvalMode, create_ab_evaluator
-from algorithms.evaluation import PIECE_VALUES, evaluate
+from algorithms.evaluation import PIECE_VALUES
 
 
 

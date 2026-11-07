@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
+import shutil
 import subprocess
 import sys
 import time
@@ -46,7 +46,6 @@ def run_single_pair(
 
     # Ensure output_dir is fresh
     if output_dir.exists():
-        import shutil
         shutil.rmtree(output_dir, ignore_errors=True)
 
     cmd = [
