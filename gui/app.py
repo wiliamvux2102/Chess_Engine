@@ -913,14 +913,27 @@ class ChessGUI:
     # ============================================================
 
     def _maybe_schedule_ai(self) -> None:
+        if self.after_id is not None:
+            try:
+                self.root.after_cancel(self.after_id)
+            except tk.TclError:
+                pass
+            self.after_id = None
+
         if self.paused or self.controller.is_terminal():
             return
         if self.current_agent() is None:
             return
+
+        # Reconcile worker state if a previously cancelled thread has exited
+        if self.ai_worker_thread is not None and not self.ai_worker_thread.is_alive():
+            self.ai_worker_thread = None
+            self.ai_thinking = False
+
         if self.ai_thinking or (self.ai_worker_thread is not None and self.ai_worker_thread.is_alive()):
-            if self.after_id is None:
-                self.after_id = self.root.after(40, self._maybe_schedule_ai)
+            self.after_id = self.root.after(40, self._maybe_schedule_ai)
             return
+
         delay = self._parse_delay_ms() if self.last_move is not None else 20
         self.after_id = self.root.after(max(1, delay), self._start_ai_turn)
 
@@ -928,7 +941,12 @@ class ChessGUI:
         self.after_id = None
         if self.controller.is_terminal():
             return
+        if self.ai_worker_thread is not None and not self.ai_worker_thread.is_alive():
+            self.ai_worker_thread = None
+            self.ai_thinking = False
         if self.ai_thinking or (self.ai_worker_thread is not None and self.ai_worker_thread.is_alive()):
+            if not self.paused:
+                self.after_id = self.root.after(40, self._maybe_schedule_ai)
             return
         agent = self.current_agent()
         if agent is None:
@@ -978,6 +996,8 @@ class ChessGUI:
                 if self.ai_worker_thread is not None and not self.ai_worker_thread.is_alive():
                     self.ai_worker_thread = None
                     self.ai_thinking = False
+                if not self.paused and not self.ai_thinking:
+                    self._maybe_schedule_ai()
                 continue
 
             self.ai_thinking = False

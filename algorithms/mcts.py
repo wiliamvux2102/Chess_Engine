@@ -2,6 +2,7 @@
 
 import math
 import random
+from time import perf_counter
 
 import chess
 from algorithms.mcts_node import MCTSNode
@@ -20,20 +21,29 @@ class MCTS:
         self,
         iterations: int = 1000,
         *,
+        time_limit: float | None = None,
         exploration_constant: float = 2 * math.sqrt(2),
         rollout_max_plies: int = 80,
         seed: int | None = None,
         claim_draw: bool = True,
         eval_mode: EvalMode | None = None,
     ):
-        """Configure the iteration budget, UCT exploration and rollout limit.
+        """Configure the iteration budget, optional time budget, UCT exploration and rollout limit.
 
         rollout_max_plies counts half-moves; zero evaluates without further play.
+        time_limit caps search duration in seconds after at least one iteration completes.
         seed controls a private RNG; claim_draw should match the controller.
         eval_mode: Evaluation mode - AB_CLASSIC or MCTS_PE.
         """
         if type(iterations) is not int or iterations < 1:
             raise ValueError("iterations must be a positive integer")
+        if time_limit is not None and (
+            isinstance(time_limit, bool)
+            or not isinstance(time_limit, (int, float))
+            or not math.isfinite(time_limit)
+            or time_limit <= 0
+        ):
+            raise ValueError("time_limit must be a positive finite number or None")
         if (
             isinstance(exploration_constant, bool)
             or not isinstance(exploration_constant, (int, float))
@@ -50,6 +60,7 @@ class MCTS:
         self.eval_mode = eval_mode if eval_mode is not None else EvalMode.MCTS_PE
 
         self.iterations = iterations
+        self.time_limit: float | None = float(time_limit) if time_limit is not None else None
         self.exploration_constant = exploration_constant
         self.rollout_max_plies = rollout_max_plies
         self.seed = seed
@@ -80,12 +91,20 @@ class MCTS:
         root = MCTSNode(board, claim_draw=self.claim_draw)
         if root.is_terminal():
             raise ValueError("Cannot choose a move in a terminal position")
+        deadline = (
+            perf_counter() + self.time_limit
+            if self.time_limit is not None
+            else None
+        )
         winning_moves = self._prepare_root(root)
         if self._stop_requested:
             raise InterruptedError("Search cancelled")
+        completed_iterations = 0
         for _ in range(self.iterations):
             if self._stop_requested:
                 raise InterruptedError("Search cancelled")
+            if deadline is not None and completed_iterations >= 1 and perf_counter() >= deadline:
+                break
             node = root
             # Selection: descend through fully expanded nodes using UCT.
             while not node.untried_moves and node.children:
@@ -95,9 +114,13 @@ class MCTS:
                 move = (node.untried_moves[-1] if node is root else
                         rollout_move(node.board, self._rng, node.untried_moves))
                 node = node.expand(self._rng, move)
-            value = self._simulate(node.board)
+            value = self._simulate(node.board, deadline=deadline)
             node.backpropagate_value(value)
-        self.last_search_stats = {"iterations": self.iterations, "rollouts": self.iterations}
+            completed_iterations += 1
+        self.last_search_stats = {
+            "iterations": completed_iterations,
+            "rollouts": completed_iterations,
+        }
         if winning_moves:
             return winning_moves[0]
         best = max(root.children, key=lambda child: (child.visits, child.mean_value))
@@ -157,7 +180,7 @@ class MCTS:
         root.untried_moves.sort(key=lambda move: priorities[move])
         return winning
 
-    def _simulate(self, board: chess.Board) -> float:
+    def _simulate(self, board: chess.Board, *, deadline: float | None = None) -> float:
         """Play a bounded continuation on a copy and return a White-perspective reward.
 
         Return +1/0/-1 for a terminal result; otherwise use configured evaluator
@@ -167,6 +190,8 @@ class MCTS:
         rollout = board.copy(stack=True)
         for _ in range(self.rollout_max_plies):
             if self._stop_requested:
+                break
+            if deadline is not None and perf_counter() >= deadline:
                 break
             outcome = rollout.outcome(claim_draw=self.claim_draw)
             if outcome is not None:

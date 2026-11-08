@@ -15,12 +15,69 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import shutil
 import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+
+def _is_pair_complete_and_matching(
+    output_dir: Path,
+    *,
+    eval_mode: str,
+    depth: int,
+    iterations: int,
+    rounds: int,
+    max_plies: int,
+    seed: int,
+) -> bool:
+    """Verify that output_dir contains a complete tournament matching the exact parameters."""
+    standings_path = output_dir / "standings.csv"
+    if not standings_path.is_file():
+        return False
+
+    expected_games = rounds * 2
+    try:
+        with open(standings_path, "r", encoding="utf-8") as f:
+            reader = list(csv.DictReader(f))
+        if len(reader) != 2:
+            return False
+        for row in reader:
+            if int(row.get("games", -1)) != expected_games:
+                return False
+
+        # Reject if extra rounds from a larger previous tournament exist
+        if (output_dir / f"opening_1_round_{rounds + 1}_swap_0.json").exists():
+            return False
+
+        game_idx = 0
+        for r in range(1, rounds + 1):
+            for s in (0, 1):
+                game_idx += 1
+                match_json = output_dir / f"opening_1_round_{r}_swap_{s}.json"
+                if not match_json.is_file():
+                    return False
+                data = json.loads(match_json.read_text(encoding="utf-8"))
+                cfg = data.get("config", {})
+                if cfg.get("max_plies") != max_plies:
+                    return False
+                ab_cfg = cfg.get("Alpha-Beta", {})
+                if ab_cfg.get("depth") != depth or ab_cfg.get("eval_mode") != eval_mode:
+                    return False
+                mcts_cfg = cfg.get("MCTS", {})
+                expected_seed = (seed + game_idx - 1) if seed is not None else None
+                if (
+                    mcts_cfg.get("iterations") != iterations
+                    or mcts_cfg.get("eval_mode") != eval_mode
+                    or mcts_cfg.get("seed") != expected_seed
+                ):
+                    return False
+        return True
+    except Exception:
+        return False
 
 
 def run_single_pair(
@@ -33,18 +90,18 @@ def run_single_pair(
     seed: int = 42,
 ) -> tuple[str, int, int, float, bool, str]:
     """Run one tournament pair in a separate subprocess."""
-    standings_path = output_dir / "standings.csv"
-    if standings_path.is_file():
-        # Check if complete (header + 2 rows)
-        try:
-            with open(standings_path, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f if line.strip()]
-            if len(lines) >= 3:
-                return eval_mode, depth, iterations, 0.0, True, "Already completed"
-        except Exception:
-            pass
+    if _is_pair_complete_and_matching(
+        output_dir,
+        eval_mode=eval_mode,
+        depth=depth,
+        iterations=iterations,
+        rounds=rounds,
+        max_plies=max_plies,
+        seed=seed,
+    ):
+        return eval_mode, depth, iterations, 0.0, True, "Already completed (config verified)"
 
-    # Ensure output_dir is fresh
+    # Ensure output_dir is fresh when incomplete or config changed
     if output_dir.exists():
         shutil.rmtree(output_dir, ignore_errors=True)
 
@@ -67,7 +124,7 @@ def run_single_pair(
     elapsed = time.perf_counter() - t0
 
     if res.returncode != 0:
-        return eval_mode, depth, iterations, elapsed, False, res.stderr.strip()
+        return eval_mode, depth, iterations, elapsed, False, res.stderr.strip() or f"Exit code {res.returncode}"
     return eval_mode, depth, iterations, elapsed, True, "OK"
 
 
@@ -110,7 +167,7 @@ def aggregate_master_standings(base_dir: Path, pairs: list[tuple[str, int, int]]
     return master_csv
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run full evaluation-parity tournament batch.")
     parser.add_argument("--workers", type=int, default=4, help="Concurrent tournament workers (default: 4)")
     parser.add_argument("--rounds", type=int, default=5, help="Rounds per pair (default: 5 = 10 games)")
@@ -122,7 +179,7 @@ def main() -> int:
         default=Path("experiments/results/parity_eval_batch"),
         help="Target base directory",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     base_dir = args.output_dir
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -141,12 +198,13 @@ def main() -> int:
     total_pairs = len(pairs)
     print("=" * 60)
     print(f"=== PARITY TOURNAMENT BATCH ({total_pairs} pairs, {total_pairs * args.rounds * 2} games) ===")
-    print(f"=== Workers: {args.workers} | Rounds: {args.rounds} (10 games/pair) ===")
+    print(f"=== Workers: {args.workers} | Rounds: {args.rounds} ({args.rounds * 2} games/pair) ===")
     print(f"=== Output: {base_dir} ===")
     print("=" * 60)
 
     start_all = time.perf_counter()
     completed = 0
+    failed_pairs: list[tuple[str, int, int, str]] = []
 
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = {}
@@ -171,15 +229,25 @@ def main() -> int:
                     mins = elapsed / 60.0
                     print(f"[{completed}/{total_pairs}] DONE {ret_mode} d={ret_d} i={ret_i} in {mins:.2f}m ({msg})")
                 else:
+                    failed_pairs.append((ret_mode, ret_d, ret_i, msg))
                     print(f"[{completed}/{total_pairs}] FAILED {ret_mode} d={ret_d} i={ret_i}: {msg}")
             except Exception as exc:
+                failed_pairs.append((mode, d, i, str(exc)))
                 print(f"[{completed}/{total_pairs}] ERROR {mode} d={d} i={i}: {exc}")
 
     total_mins = (time.perf_counter() - start_all) / 60.0
     print("=" * 60)
-    print(f"=== ALL PAIRS COMPLETED in {total_mins:.2f} minutes ===")
-
     master_csv = aggregate_master_standings(base_dir, pairs)
+
+    if failed_pairs:
+        print(f"=== BATCH INCOMPLETE: {len(failed_pairs)}/{total_pairs} PAIR(S) FAILED in {total_mins:.2f} minutes ===")
+        for f_mode, f_d, f_i, f_msg in failed_pairs:
+            print(f"  - {f_mode} d={f_d} i={f_i}: {f_msg}")
+        print(f"=== Partial standings written to: {master_csv} ===")
+        print("=" * 60)
+        return 1
+
+    print(f"=== ALL {total_pairs} PAIRS COMPLETED in {total_mins:.2f} minutes ===")
     print(f"=== Master standings written to: {master_csv} ===")
     print("=" * 60)
     return 0

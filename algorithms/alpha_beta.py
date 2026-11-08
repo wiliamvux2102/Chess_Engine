@@ -5,6 +5,9 @@ All scores use White's perspective:
 White maximizes and Black minimizes.
 """
 
+import math
+from time import perf_counter
+
 import chess
 
 from algorithms.eval_registry import EvalMode, create_ab_evaluator
@@ -65,13 +68,22 @@ class AlphaBetaAI:
         self,
         depth: int = 3,
         *,
+        time_limit: float | None = None,
         eval_mode: EvalMode | str = EvalMode.AB_CLASSIC,
         claim_draw: bool = True,
     ):
         if depth < 1:
             raise ValueError("Search depth must be positive")
+        if time_limit is not None and (
+            isinstance(time_limit, bool)
+            or not isinstance(time_limit, (int, float))
+            or not math.isfinite(time_limit)
+            or time_limit <= 0
+        ):
+            raise ValueError("time_limit must be a positive finite number or None")
 
         self.depth = depth
+        self.time_limit: float | None = float(time_limit) if time_limit is not None else None
         if isinstance(eval_mode, str):
             mode_map = {
                 "ab_classic": EvalMode.AB_CLASSIC,
@@ -82,6 +94,8 @@ class AlphaBetaAI:
         self.claim_draw = claim_draw
         self._evaluator = create_ab_evaluator(self.eval_mode, claim_draw=self.claim_draw)
         self._stop_requested = False
+        self._deadline: float | None = None
+        self._timed_out = False
         self.last_search_stats = {
             "depth": 0,
             "nodes": 0,
@@ -99,6 +113,12 @@ class AlphaBetaAI:
             raise ValueError("Cannot choose a move in a terminal position")
 
         self._stop_requested = False
+        self._deadline = (
+            perf_counter() + self.time_limit
+            if self.time_limit is not None
+            else None
+        )
+        self._timed_out = False
         self.last_search_stats = {
             "depth": 0,
             "nodes": 0,
@@ -119,6 +139,9 @@ class AlphaBetaAI:
         for move in legal_moves:
             if self._stop_requested:
                 raise InterruptedError("Search cancelled")
+            if self._deadline is not None and perf_counter() >= self._deadline:
+                self._timed_out = True
+                break
 
             board.push(move)
 
@@ -135,6 +158,8 @@ class AlphaBetaAI:
 
             if self._stop_requested:
                 raise InterruptedError("Search cancelled")
+            if self._timed_out:
+                break
 
             if maximizing:
                 if score > best_score:
@@ -165,6 +190,9 @@ class AlphaBetaAI:
         """Return a minimax score or an alpha-beta bound."""
         if self._stop_requested:
             return 0.0
+        if self._deadline is not None and perf_counter() >= self._deadline:
+            self._timed_out = True
+            return 0.0
 
         self.last_search_stats["nodes"] += 1
 
@@ -183,7 +211,7 @@ class AlphaBetaAI:
             best_score = float("-inf")
 
             for move in order_moves(board):
-                if self._stop_requested:
+                if self._stop_requested or self._timed_out:
                     break
                 board.push(move)
 
@@ -197,6 +225,9 @@ class AlphaBetaAI:
                     )
                 finally:
                     board.pop()
+
+                if self._stop_requested or self._timed_out:
+                    break
 
                 best_score = max(best_score, score)
 
@@ -213,7 +244,7 @@ class AlphaBetaAI:
             best_score = float("inf")
 
             for move in order_moves(board):
-                if self._stop_requested:
+                if self._stop_requested or self._timed_out:
                     break
                 board.push(move)
 
@@ -227,6 +258,9 @@ class AlphaBetaAI:
                     )
                 finally:
                     board.pop()
+
+                if self._stop_requested or self._timed_out:
+                    break
 
                 best_score = min(best_score, score)
 

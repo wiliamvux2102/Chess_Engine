@@ -59,10 +59,16 @@ def build_agent(
         return None
     if normalized in ("alpha_beta", "alphabeta"):
         parsed_depth = parse_optional_int(depth, "Alpha-Beta depth")
+        parsed_time = (
+            parse_optional_float(time_limit, "Alpha-Beta time budget")
+            if time_limit is not None and str(time_limit).strip()
+            else None
+        )
         if parsed_depth is None:
             raise ValueError("Alpha-Beta depth is required")
         ab_kwargs: dict[str, object] = {
             "depth": parsed_depth,
+            "time_limit": parsed_time,
             "claim_draw": claim_draw,
         }
         if eval_mode is not None:
@@ -77,12 +83,16 @@ def build_agent(
         return AlphaBetaAI(**ab_kwargs)
     if normalized == "mcts":
         parsed_iter = parse_optional_int(iterations, "MCTS simulations")
-        if time_limit is not None and str(time_limit).strip():
+        parsed_time = (
             parse_optional_float(time_limit, "MCTS time budget")
+            if time_limit is not None and str(time_limit).strip()
+            else None
+        )
         if parsed_iter is None:
             raise ValueError("MCTS requires simulations")
         mcts_kwargs: dict[str, object] = {
             "iterations": parsed_iter,
+            "time_limit": parsed_time,
             "seed": seed,
             "claim_draw": claim_draw,
         }

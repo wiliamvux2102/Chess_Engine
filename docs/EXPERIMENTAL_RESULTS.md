@@ -15,7 +15,8 @@ Nếu hai thuật toán tìm kiếm sử dụng hai hàm đánh giá thế cờ 
 - **Độ sâu Alpha-Beta (`depth`)**: $d \in \{1, 2, 3\}$.
 - **Số vòng mô phỏng MCTS (`iterations`)**: $N \in \{50, 100, 200\}$ (giới hạn rollout $k_{\max} = 24$ plies).
 - **Quy mô mỗi cặp tham số**: 5 vòng đấu cặp đổi màu quân (`rounds = 5`) = **10 ván đấu** (5 ván Alpha-Beta cầm quân Trắng, 5 ván MCTS cầm quân Trắng).
-- **Tính độc lập ngẫu nhiên (Per-Game Seed Diversity)**: Trong `experiments/tournament.py` và `main.py`, mỗi ván thứ $k \in \{1, \dots, 10\}$ khởi tạo MCTS với `seed = base_seed + k - 1` (từ `42` đến `51`), đảm bảo 10 ván trong mỗi cặp là 10 thử nghiệm ngẫu nhiên độc lập hoàn toàn nhưng vẫn tái lập được 100%.
+- **Tính độc lập ngẫu nhiên (Per-Game Seed Diversity)**: Trong `experiments/tournament.py` và `main.py`, mỗi ván thứ $k \in \{1, \dots, 10\}$ khởi tạo MCTS với `seed = base_seed + k - 1` (từ `42` đến `51`) và ghi chính xác seed của từng ván vào metadata JSON tương ứng, đảm bảo 10 ván trong mỗi cặp là 10 thử nghiệm ngẫu nhiên độc lập hoàn toàn nhưng vẫn tái lập được 100%.
+- **Môi trường thực thi & Đo thời gian**: Batch 18 cặp (180 ván) được thực thi qua `experiments/run_parity_tournament.py` với `--workers 4` tiến trình chạy song song trên hệ thống CPU 16 luồng (mỗi worker chạy tuần tự 1 cặp giải đấu độc lập). Do chạy 4 tiến trình đồng thời, thời gian wall-clock mỗi nước đi (`seconds` đo qua `time.perf_counter()`) chịu ảnh hưởng nhẹ từ chia sẻ băng thông bộ nhớ/cache CPU giữa các worker; nếu cần đo benchmark latency tuyệt đối của từng thuật toán đơn lẻ, sử dụng `--workers 1` (chạy tuần tự).
 - **Điều kiện kết thúc ván**: Áp dụng đầy đủ luật FIDE (`claim_draw=True`: chiếu hết, hết nước đi, lặp lại 3 lần, luật 50 nước, thiếu quân chiếu hết) với trần `max_plies = 500`. Toàn bộ **180/180 ván** đều kết thúc tự nhiên (`unfinished = 0`).
 
 ---

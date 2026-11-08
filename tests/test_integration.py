@@ -425,6 +425,83 @@ class GUIIntegrationTests(unittest.TestCase):
         finally:
             gui2.close()
 
+    def test_resume_recovers_after_slow_cancelling_worker(self):
+        """Verify that if a worker takes longer than join(0.3s) to exit on Pause,
+        clicking Resume still schedules and executes the AI turn once the old worker exits."""
+        gui = self.gui = ChessGUI(
+            self.root,
+            white_kind="human",
+            black_kind="alpha_beta",
+            black_depth=1,
+            move_delay_ms=10,
+            error_handler=lambda t, m: self.errors.append((t, m)),
+        )
+
+        class SlowCancelAI:
+            def __init__(self):
+                self.calls = 0
+                self.last_search_stats = {"depth": 1, "nodes": 5}
+
+            def abort_search(self):
+                pass
+
+            def choose_move(self, board: chess.Board) -> chess.Move:
+                self.calls += 1
+                if self.calls == 1:
+                    # Exceed the 0.3s join timeout in _cancel_pending_ai and >40ms after Resume
+                    time.sleep(0.45)
+                return next(iter(board.legal_moves))
+
+        slow_ai = SlowCancelAI()
+        gui.agents[chess.BLACK] = slow_ai
+
+        # Human plays e2e4 -> starts Black's slow first search
+        gui.select_square(chess.E2)
+        self.assertTrue(gui.select_square(chess.E4))
+        deadline = time.perf_counter() + 1.0
+        while time.perf_counter() < deadline:
+            self.root.update()
+            if gui.ai_worker_thread is not None and gui.ai_worker_thread.is_alive():
+                break
+            time.sleep(0.01)
+
+        # Pause: join(0.3s) times out while worker is still sleeping (0.45s total)
+        gui.toggle_pause()
+        self.assertTrue(gui.paused)
+        self.assertTrue(gui.ai_worker_thread is not None and gui.ai_worker_thread.is_alive())
+
+        # Immediately Resume while the old worker is still alive
+        gui.toggle_pause()
+        self.assertFalse(gui.paused)
+
+        # Wait for the old worker to finish and the new AI turn to be scheduled and applied
+        self.assertTrue(self._wait_for_ai_move(gui, timeout=3.0))
+        self.assertEqual(len(gui.controller.board.move_stack), 2)
+        self.assertEqual(slow_ai.calls, 2)
+
+    def test_time_limit_enforced_in_mcts_and_alpha_beta(self):
+        """Verify that time_limit genuinely bounds MCTS and AlphaBetaAI execution time."""
+        board = chess.Board()
+        mcts_ai = build_agent("mcts", iterations="10000", time_limit="0.05", seed=7)
+        self.assertIsInstance(mcts_ai, MCTS)
+        self.assertEqual(mcts_ai.time_limit, 0.05)
+        t0 = time.perf_counter()
+        move_mcts = mcts_ai.choose_move(board)
+        elapsed_mcts = time.perf_counter() - t0
+        self.assertIn(move_mcts, board.legal_moves)
+        self.assertLess(mcts_ai.last_search_stats["iterations"], 10000)
+        self.assertGreaterEqual(mcts_ai.last_search_stats["iterations"], 1)
+        self.assertLess(elapsed_mcts, 1.0)
+
+        ab_ai = build_agent("alpha_beta", depth="6", time_limit="0.04")
+        self.assertIsInstance(ab_ai, AlphaBetaAI)
+        self.assertEqual(ab_ai.time_limit, 0.04)
+        t1 = time.perf_counter()
+        move_ab = ab_ai.choose_move(board)
+        elapsed_ab = time.perf_counter() - t1
+        self.assertIn(move_ab, board.legal_moves)
+        self.assertLess(elapsed_ab, 1.0)
+
     def test_invalid_config_handled_gracefully(self):
         gui = self.gui = ChessGUI(
             self.root,
@@ -520,6 +597,96 @@ class BenchmarkAndCLIIntegrationTests(unittest.TestCase):
             self.assertIn("Alpha-Beta", standings)
             self.assertIn("MCTS", standings)
             self.assertTrue((tourney_dir / "standings.csv").is_file())
+
+    def test_tournament_per_game_seed_metadata_and_batch_verification(self):
+        from experiments.run_parity_tournament import (
+            _is_pair_complete_and_matching,
+            main as batch_main,
+        )
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tourney_dir = Path(tmpdir) / "seed_check"
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = main(
+                    [
+                        "tournament",
+                        "--depth",
+                        "1",
+                        "--iterations",
+                        "4",
+                        "--ab-eval-mode",
+                        "ab_classic",
+                        "--eval-mode",
+                        "ab_classic",
+                        "--rounds",
+                        "2",
+                        "--max-plies",
+                        "2",
+                        "--seed",
+                        "42",
+                        "--output-dir",
+                        str(tourney_dir),
+                    ]
+                )
+            self.assertEqual(rc, 0)
+
+            # Verify JSON metadata records exact per-game seeds 42, 43, 44, 45
+            recorded_seeds = []
+            for r in (1, 2):
+                for s in (0, 1):
+                    jf = tourney_dir / f"opening_1_round_{r}_swap_{s}.json"
+                    data = json.loads(jf.read_text(encoding="utf-8"))
+                    recorded_seeds.append(data["config"]["MCTS"]["seed"])
+            self.assertEqual(recorded_seeds, [42, 43, 44, 45])
+
+            # Verify _is_pair_complete_and_matching checks exact config before skipping
+            self.assertTrue(
+                _is_pair_complete_and_matching(
+                    tourney_dir,
+                    eval_mode="ab_classic",
+                    depth=1,
+                    iterations=4,
+                    rounds=2,
+                    max_plies=2,
+                    seed=42,
+                )
+            )
+            # Changing seed, rounds, max_plies, depth, or iterations must invalidate cache
+            self.assertFalse(
+                _is_pair_complete_and_matching(
+                    tourney_dir,
+                    eval_mode="ab_classic",
+                    depth=1,
+                    iterations=4,
+                    rounds=2,
+                    max_plies=2,
+                    seed=99,
+                )
+            )
+            self.assertFalse(
+                _is_pair_complete_and_matching(
+                    tourney_dir,
+                    eval_mode="ab_classic",
+                    depth=1,
+                    iterations=4,
+                    rounds=3,
+                    max_plies=2,
+                    seed=42,
+                )
+            )
+
+            # Verify batch runner returns non-zero exit code when a pair fails
+            batch_out = Path(tmpdir) / "batch_fail"
+            with patch(
+                "experiments.run_parity_tournament.run_single_pair",
+                return_value=("ab_classic", 1, 50, 0.01, False, "Simulated subprocess error"),
+            ), redirect_stdout(io.StringIO()):
+                batch_rc = batch_main(
+                    ["--workers", "1", "--rounds", "1", "--max-plies", "2", "--output-dir", str(batch_out)]
+                )
+            self.assertEqual(batch_rc, 1)
 
 
 if __name__ == "__main__":
