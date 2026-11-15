@@ -63,15 +63,35 @@ def run_tournament(
     if output is not None:
         output.mkdir(parents=True, exist_ok=False)
     matches = []
+    game_idx = 0
     for opening_index, fen in enumerate(positions, 1):
         for repetition in range(1, rounds + 1):
             for swapped in (False, True):
-                a, b = factory_a(), factory_b()
+                game_idx += 1
+                try:
+                    a = factory_a(game_idx)  # type: ignore[call-arg]
+                except TypeError:
+                    a = factory_a()
+                try:
+                    b = factory_b(game_idx)  # type: ignore[call-arg]
+                except TypeError:
+                    b = factory_b()
+
+                game_config = None
+                if config is not None:
+                    game_config = {
+                        k: (dict(v) if isinstance(v, dict) else v)
+                        for k, v in config.items()
+                    }
+                    for agent_name, agent_obj in ((name_a, a), (name_b, b)):
+                        if isinstance(game_config.get(agent_name), dict) and hasattr(agent_obj, "seed"):
+                            game_config[agent_name]["seed"] = getattr(agent_obj, "seed")
+
                 match = run_match(
                     b if swapped else a, a if swapped else b,
                     white_name=name_b if swapped else name_a,
                     black_name=name_a if swapped else name_b,
-                    fen=fen, max_plies=max_plies, claim_draw=claim_draw, config=config,
+                    fen=fen, max_plies=max_plies, claim_draw=claim_draw, config=game_config,
                 )
                 matches.append(match)
                 if output is not None:
